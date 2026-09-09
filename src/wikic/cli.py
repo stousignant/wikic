@@ -7,6 +7,7 @@ from typing import Any
 
 from .core import (
     OKF_PROFILE,
+    VAULT_POLICY_PROFILE,
     build_catalog,
     build_graph,
     build_llms_text,
@@ -40,8 +41,8 @@ def add_vault_flag(parser: argparse.ArgumentParser) -> None:
 def add_profile_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
-        choices=[OKF_PROFILE],
-        help="Opt-in compatibility audit profile. Defaults preserve existing output.",
+        choices=[OKF_PROFILE, VAULT_POLICY_PROFILE],
+        help="Opt-in standards or configured policy audit profile.",
     )
 
 
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     doctor.add_argument(
         "--require-vault-files",
         action="store_true",
-        help="Require SCHEMA.md, index.md, and log.md in the vault root.",
+        help="Require root files listed in .wikic/config.json.",
     )
     add_profile_flag(doctor)
 
@@ -78,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument(
         "--require-vault-files",
         action="store_true",
-        help="Require SCHEMA.md, index.md, and log.md in the vault root.",
+        help="Require root files listed in .wikic/config.json.",
     )
     add_profile_flag(health)
 
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     repair_plan.add_argument(
         "--require-vault-files",
         action="store_true",
-        help="Require SCHEMA.md, index.md, and log.md in the underlying doctor report.",
+        help="Require root files listed in .wikic/config.json.",
     )
     repair_plan.add_argument(
         "--patch-preview",

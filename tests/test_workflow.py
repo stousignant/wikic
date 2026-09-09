@@ -175,6 +175,11 @@ def test_lint_candidates_reports_invalid_candidate_shape_and_path(tmp_path: Path
 def test_doctor_can_require_canonical_vault_files(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
+    (vault / ".wikic").mkdir()
+    (vault / ".wikic" / "config.json").write_text(
+        '{"required_root_files": ["SCHEMA.md", "index.md", "log.md"]}',
+        encoding="utf-8",
+    )
     (vault / "index.md").write_text("# Index\n", encoding="utf-8")
 
     result = run_cli("doctor", "--root", str(vault), "--require-vault-files", "--json")

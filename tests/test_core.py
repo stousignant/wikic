@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from wikic.core import (
     build_catalog,
     build_graph,
@@ -10,11 +12,11 @@ from wikic.core import (
     build_okf_readiness,
     build_repair_plan,
     build_summary,
+    build_vault_policy_readiness,
     load_config,
     run_doctor,
     split_frontmatter,
 )
-from wikic.core import build_okf_readiness as core_build_okf_readiness
 
 
 def write(path: Path, text: str) -> None:
@@ -64,14 +66,14 @@ def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:
                 "naming_policy_exemptions": [
                     "README.md",
                     "SCHEMA.md",
-                    "research/github-repos/repos/*--*.md",
+                    "catalog/repositories/*--*.md",
                 ]
             }
         ),
     )
     write(
         tmp_path / "index.md",
-        "# Home\n[[tools/wikic]]\n[[research/github-repos/repos/NousResearch--Hermes-Agent]]\n",
+        "# Home\n[[tools/wikic]]\n[[catalog/repositories/ExampleOrg--SampleTool]]\n",
     )
     write(
         tmp_path / "tools" / "wikic.md",
@@ -81,7 +83,7 @@ def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:
     write(tmp_path / "README.md", "# Conventional README\n[[index]]\n")
     write(tmp_path / "SCHEMA.md", "# Conventional schema policy\n[[index]]\n")
     write(
-        tmp_path / "research" / "github-repos" / "repos" / "NousResearch--Hermes-Agent.md",
+        tmp_path / "catalog" / "repositories" / "ExampleOrg--SampleTool.md",
         "---\ntype: reference\nstatus: active\n---\n# Repo card\n",
     )
 
@@ -104,83 +106,172 @@ def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:
     assert "okf_readiness" not in summary
 
 
-def test_okf_readiness_audits_curated_pages_and_source_provenance(tmp_path: Path) -> None:
-    write(tmp_path / "projects" / "missing-type.md", "# Missing Type\n")
-    write(tmp_path / "concepts" / "bad-type.md", "---\ntype: youtube-review\n---\n# Bad Type\n")
+def test_okf_v02_accepts_unknown_types_extensions_and_nested_metadata(tmp_path: Path) -> None:
     write(
-        tmp_path / "tools" / "unknown-field.md",
-        "---\ntype: tool\ncustom: value\n---\n# Unknown Field\n",
+        tmp_path / "index.md",
+        "---\nokf_version: '0.2'\n---\n# Concepts\n\n* [Widget](widget.md) - Example.\n",
     )
     write(
-        tmp_path / "source-notes" / "article.md",
-        "---\ntype: source-note\n---\n# Article\n",
+        tmp_path / "widget.md",
+        "---\ntype: Domain-Specific Widget\ncustom:\n  nested: true\nsources:\n"
+        "  - resource: https://example.test/source\n---\n# Widget\n",
     )
     write(
-        tmp_path / "source-notes" / "with-source.md",
-        "---\ntype: source-note\nsource_url: https://example.test\n---\n# Article\n",
-    )
-    write(tmp_path / "raw" / "ignored.md", "# Ignored raw\n")
-    write(tmp_path / "scratch" / "ignored.md", "# Ignored scratch\n")
-
-    readiness = build_okf_readiness(tmp_path)
-
-    assert readiness["total_checked_pages"] == 5
-    assert readiness["pages_missing_type"] == 1
-    assert readiness["missing_type_pages"] == [
-        {"path": "projects/missing-type.md", "suggested_type": "project"}
-    ]
-    assert readiness["invalid_type_pages"] == [
-        {"path": "concepts/bad-type.md", "type": "youtube-review"}
-    ]
-    assert readiness["provenance_gap_pages"] == [
-        {"path": "source-notes/article.md", "type": "source-note"}
-    ]
-    assert readiness["unknown_fields"] == [
-        {"field": "custom", "count": 1, "paths": ["tools/unknown-field.md"]}
-    ]
-
-
-def test_okf_readiness_reports_malformed_and_complex_frontmatter(tmp_path: Path) -> None:
-    write(tmp_path / "projects" / "malformed.md", "---\ntype project\n---\n# Bad\n")
-    write(
-        tmp_path / "projects" / "complex.md",
-        "---\ntype: project\nmetadata:\n  owner: Example User\n---\n# Complex\n",
+        tmp_path / "log.md",
+        "# Update Log\n\n## 2026-06-02\n* Added widget.\n\n## 2026-06-01\n* Started.\n",
     )
 
     readiness = build_okf_readiness(tmp_path)
 
-    assert readiness["malformed_frontmatter_count"] == 1
-    assert readiness["malformed_frontmatter_pages"] == [{"path": "projects/malformed.md"}]
-    assert readiness["export_blocking_shape_count"] == 1
-    assert readiness["export_blocking_shapes"] == [
-        {"path": "projects/complex.md", "field": "metadata"}
+    assert readiness["conformant"] is True
+    assert readiness["concept_document_count"] == 1
+    assert readiness["reserved_file_count"] == 2
+    assert readiness["invalid_type_count"] == 0
+
+
+def test_okf_v02_reports_all_normative_conformance_failures(tmp_path: Path) -> None:
+    write(tmp_path / "missing-frontmatter.md", "# Missing\n")
+    write(tmp_path / "malformed.md", "---\ntype: [unterminated\n---\n# Bad\n")
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
+    write(tmp_path / "index.md", "---\ntitle: Not Allowed\n---\n# Index\n")
+    write(tmp_path / "log.md", "# Log\n\n## June 1\n* Update.\n")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["conformant"] is False
+    assert readiness["missing_frontmatter_pages"] == [{"path": "missing-frontmatter.md"}]
+    assert readiness["malformed_frontmatter_pages"] == [{"path": "malformed.md"}]
+    assert readiness["invalid_type_pages"] == [{"path": "missing-type.md", "type": "None"}]
+    assert readiness["invalid_index_files"] == [
+        {"path": "index.md", "reason": "unsupported_root_frontmatter"}
     ]
+    assert readiness["invalid_log_files"] == [{"path": "log.md", "reason": "invalid_date_heading"}]
+
+
+def test_okf_v02_reports_non_utf8_markdown_without_crashing(tmp_path: Path) -> None:
+    (tmp_path / "binary.md").write_bytes(b"\xff\xfe")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["conformant"] is False
+    assert readiness["invalid_utf8_files"] == [{"path": "binary.md"}]
+
+
+def test_okf_v02_checks_hidden_paths_and_respects_reserved_name_case(tmp_path: Path) -> None:
+    write(tmp_path / ".hidden" / "bad.md", "# Missing metadata\n")
+    write(tmp_path / "INDEX.md", "---\ntype: page\n---\n# Uppercase concept\n")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["concept_document_count"] == 2
+    assert readiness["reserved_file_count"] == 0
+    assert readiness["missing_frontmatter_pages"] == [{"path": ".hidden/bad.md"}]
+
+
+def test_okf_v02_handles_recursive_and_nonfinite_invalid_types(tmp_path: Path) -> None:
+    write(tmp_path / "recursive.md", "---\ntype: &cycle [*cycle]\n---\n# Recursive\n")
+    write(tmp_path / "nan.md", "---\ntype: .nan\n---\n# Nonfinite\n")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    json.dumps(readiness, allow_nan=False)
+    assert readiness["invalid_type_count"] == 2
+    assert all(isinstance(item["type"], str) for item in readiness["invalid_type_pages"])
+
+
+def test_okf_v02_rejects_empty_index_sections_and_log_prose(tmp_path: Path) -> None:
+    write(
+        tmp_path / "index.md",
+        "# Index\n\n## Populated\n- [Page](page.md)\n\n## Empty\n",
+    )
+    write(
+        tmp_path / "log.md",
+        "# Change Log\n\n## 2026-06-01\n  Indented prose only.\n",
+    )
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["invalid_index_files"] == [
+        {"path": "index.md", "reason": "section_without_link_entry"}
+    ]
+    assert readiness["invalid_log_files"] == [{"path": "log.md", "reason": "invalid_date_entries"}]
+
+
+def test_okf_profile_summary_reports_non_utf8_instead_of_crashing(tmp_path: Path) -> None:
+    (tmp_path / "binary.md").write_bytes(b"\xff\xfe")
+
+    summary = build_summary(tmp_path, profile="okf-v0.2")
+    doctor = run_doctor(tmp_path, profile="okf-v0.2")
+
+    assert summary["okf_readiness"]["invalid_utf8_count"] == 1
+    assert any(issue["code"] == "WK015" for issue in doctor.issues)
 
 
 def test_okf_profile_is_opt_in_for_summary_and_doctor(tmp_path: Path) -> None:
-    write(tmp_path / "projects" / "missing-type.md", "# Missing Type\n")
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
 
     default_summary = build_summary(tmp_path)
-    okf_summary = build_summary(tmp_path, profile="okf-compatible")
+    okf_summary = build_summary(tmp_path, profile="okf-v0.2")
     default_doctor = run_doctor(tmp_path, ignore_orphans=True).to_dict()
-    okf_doctor = run_doctor(tmp_path, ignore_orphans=True, profile="okf-compatible").to_dict()
+    okf_doctor = run_doctor(tmp_path, ignore_orphans=True, profile="okf-v0.2").to_dict()
 
     assert "okf_readiness" not in default_summary
-    assert okf_summary["okf_readiness"]["pages_missing_type"] == 1
+    assert okf_summary["okf_readiness"]["invalid_type_count"] == 1
     assert default_doctor["issues"] == []
-    assert any(issue["code"] == "WK010" for issue in okf_doctor["issues"])
+    assert any(issue["code"] == "WK011" for issue in okf_doctor["issues"])
 
 
-def test_okf_unknown_fields_are_inventory_only_in_doctor(tmp_path: Path) -> None:
-    write(tmp_path / "tools" / "wikic.md", "---\ntype: tool\ncustom: x\n---\n# Tool\n")
+def test_vault_policy_is_configured_separately_from_okf(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps(
+            {
+                "vault_policy": {
+                    "allowed_types": ["reference"],
+                    "allowed_frontmatter_fields": ["type", "source_url"],
+                    "provenance_fields": ["source_url"],
+                    "curated_prefixes": ["knowledge/"],
+                    "excluded_patterns": ["knowledge/drafts/**"],
+                    "source_derived_prefixes": ["knowledge/sources/"],
+                    "provenance_expected_types": ["reference"],
+                    "type_suggestions": {"knowledge": "reference"},
+                }
+            }
+        ),
+    )
+    write(tmp_path / "knowledge" / "missing.md", "# Missing\n")
+    write(tmp_path / "knowledge" / "sources" / "source.md", "---\ntype: reference\n---\n# S\n")
+    write(tmp_path / "knowledge" / "drafts" / "ignored.md", "# Ignored\n")
 
-    report = run_doctor(tmp_path, ignore_orphans=True, profile="okf-compatible")
+    readiness = build_vault_policy_readiness(tmp_path)
 
-    assert report.ok is True
-    assert report.exit_code == 0
-    assert report.issue_count == 1
-    assert report.issues[0]["code"] == "WK014"
-    assert report.issues[0]["severity"] == "info"
+    assert readiness["profile"] == "vault-policy"
+    assert readiness["total_checked_pages"] == 2
+    assert readiness["missing_type_pages"] == [
+        {"path": "knowledge/missing.md", "suggested_type": "reference"}
+    ]
+    assert readiness["provenance_gap_pages"] == [
+        {"path": "knowledge/sources/source.md", "type": "reference"}
+    ]
+
+
+def test_vault_policy_without_config_has_no_hidden_scope_or_triggers(tmp_path: Path) -> None:
+    write(
+        tmp_path / "source.md",
+        """---
+source_derived: true
+source_expected: true
+provenance_expected: true
+---
+# Source
+""",
+    )
+
+    readiness = build_vault_policy_readiness(tmp_path)
+
+    assert readiness["total_checked_pages"] == 0
+    assert readiness["pages_missing_type"] == 0
+    assert readiness["provenance_gaps"] == 0
 
 
 def test_summary_reports_advisor_pressure_signals(tmp_path: Path) -> None:
@@ -259,8 +350,8 @@ status: active
         "# Draft\n\n2026-06-03 this is an ordinary date note.\n",
     )
     write(
-        tmp_path / "pai" / "operations.md",
-        "---\ntype: profile\n---\n# PAI Operations\nActive page under pai with no timeline yet.\n",
+        tmp_path / "notes" / "operations.md",
+        "---\ntype: profile\n---\n# Operations\nA non-eligible page with no timeline.\n",
     )
     write(
         tmp_path / "tools" / "empty-timeline.md",
@@ -269,21 +360,12 @@ status: active
 
     summary = build_summary(tmp_path)["timeline_coverage"]
 
-    assert summary["eligible_types"] == [
-        "company",
-        "identity",
-        "person",
-        "priorities",
-        "profile",
-        "project",
-        "system-design",
-        "tool",
-    ]
-    assert summary["eligible_path_prefixes"] == ["pai/"]
-    assert summary["eligible_pages"] == 5
+    assert summary["eligible_types"] == ["company", "person", "project", "tool"]
+    assert summary["eligible_path_prefixes"] == []
+    assert summary["eligible_pages"] == 4
     assert summary["pages_with_timeline"] == 1
     assert summary["pages_with_dates_outside_timeline"] == 1
-    assert summary["coverage_ratio"] == 0.2
+    assert summary["coverage_ratio"] == 0.25
     assert summary["top_missing_candidates"] == [
         {"path": "people/alice.md", "type": "person", "date_count": 2},
     ]
@@ -388,6 +470,27 @@ def test_summary_reports_generated_report_policy_violations(tmp_path: Path) -> N
     }
 
 
+def test_summary_handles_non_utf8_generated_report_matches(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps(
+            {
+                "generated_report_policy": {
+                    "rules": [{"path_glob": "reports/*.md", "require_frontmatter": True}]
+                }
+            }
+        ),
+    )
+    report = tmp_path / "reports" / "binary.md"
+    report.parent.mkdir(parents=True)
+    report.write_bytes(b"\xff\xfe")
+
+    summary = build_summary(tmp_path, profile="okf-v0.2")
+
+    assert summary["okf_readiness"]["invalid_utf8_files"] == [{"path": "reports/binary.md"}]
+    assert summary["generated_report_policy"]["violation_count"] == 1
+
+
 def test_load_config_returns_default_excludes(tmp_path: Path) -> None:
     config = load_config(tmp_path)
 
@@ -406,6 +509,102 @@ def test_load_config_merges_user_excludes(tmp_path: Path) -> None:
     assert "scratch/**" in config["exclude"]
 
 
+def test_load_config_can_replace_default_excludes(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        '{"exclude_mode": "replace", "exclude": ["drafts/**"]}',
+    )
+
+    config = load_config(tmp_path)
+
+    assert config["exclude"] == ["drafts/**"]
+
+
+def test_summary_uses_configured_timeline_and_large_page_policy(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps(
+            {
+                "timeline_policy": {
+                    "eligible_types": ["milestone"],
+                    "eligible_path_prefixes": ["operations/"],
+                },
+                "large_page_word_threshold": 3,
+            }
+        ),
+    )
+    write(tmp_path / "operations" / "status.md", "# Status\n2026-06-01 update\n")
+    write(tmp_path / "notes" / "large.md", "# Large\none two three\n")
+
+    summary = build_summary(tmp_path)
+
+    assert summary["timeline_coverage"]["eligible_types"] == ["milestone"]
+    assert summary["timeline_coverage"]["eligible_path_prefixes"] == ["operations/"]
+    assert summary["timeline_coverage"]["eligible_pages"] == 1
+    assert summary["large_page_pressure"]["threshold_word_count"] == 3
+    assert summary["large_page_pressure"]["page_count"] == 2
+
+
+def test_doctor_uses_safe_configured_required_root_files(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        '{"required_root_files": ["index.md", "policy/schema.md"]}',
+    )
+    write(tmp_path / "index.md", "# Index\n")
+
+    report = run_doctor(tmp_path, ignore_orphans=True, require_vault_files=True)
+
+    assert [issue["path"] for issue in report.issues if issue["code"] == "WK003"] == [
+        "policy/schema.md"
+    ]
+
+
+def test_doctor_rejects_directory_as_required_root_file(tmp_path: Path) -> None:
+    write(tmp_path / ".wikic" / "config.json", '{"required_root_files": ["required"]}')
+    (tmp_path / "required").mkdir()
+
+    report = run_doctor(tmp_path, ignore_orphans=True, require_vault_files=True)
+
+    assert any(issue["code"] == "WK003" and issue["path"] == "required" for issue in report.issues)
+
+
+def test_load_config_rejects_unsafe_required_root_files(tmp_path: Path) -> None:
+    write(tmp_path / ".wikic" / "config.json", '{"required_root_files": ["../private.md"]}')
+
+    try:
+        load_config(tmp_path)
+    except ValueError as exc:
+        assert "safe and relative" in str(exc)
+    else:
+        raise AssertionError("expected unsafe required_root_files to fail")
+
+
+@pytest.mark.parametrize(
+    "payload,expected_text",
+    [
+        ({"exclude_mode": "merge"}, "exclude_mode"),
+        ({"exclude_mode": []}, "exclude_mode"),
+        ({"large_page_word_threshold": True}, "large_page_word_threshold"),
+        ({"naming_policy_enabled": "yes"}, "naming_policy_enabled"),
+        ({"timeline_policy": {"eligible_types": [1]}}, "timeline_policy.eligible_types"),
+        ({"vault_policy": {"allowed_types": [1]}}, "vault_policy.allowed_types"),
+        (
+            {"vault_policy": {"provenance_trigger_fields": [1]}},
+            "vault_policy.provenance_trigger_fields",
+        ),
+        ({"vault_policy": {"type_suggestions": {"projects": 1}}}, "type_suggestions"),
+        ({"required_root_files": ["C:\\private.md"]}, "safe and relative"),
+    ],
+)
+def test_load_config_rejects_invalid_policy_values(
+    tmp_path: Path, payload: dict[str, object], expected_text: str
+) -> None:
+    write(tmp_path / ".wikic" / "config.json", json.dumps(payload))
+
+    with pytest.raises(ValueError, match=expected_text):
+        load_config(tmp_path)
+
+
 def test_summary_uses_configured_naming_policy_exemptions(tmp_path: Path) -> None:
     write(
         tmp_path / ".wikic" / "config.json",
@@ -414,7 +613,7 @@ def test_summary_uses_configured_naming_policy_exemptions(tmp_path: Path) -> Non
                 "naming_policy_exemptions": [
                     "README.md",
                     "SCHEMA.md",
-                    "research/github-repos/repos/*--*.md",
+                    "catalog/repositories/*--*.md",
                     "Brand Folder/*.md",
                 ]
             }
@@ -424,7 +623,7 @@ def test_summary_uses_configured_naming_policy_exemptions(tmp_path: Path) -> Non
     write(tmp_path / "SCHEMA.md", "# Conventional schema policy\n[[README]]\n")
     write(tmp_path / "Brand Folder" / "Keep Case.md", "# Keep Case\n[[README]]\n")
     write(
-        tmp_path / "research" / "github-repos" / "repos" / "NousResearch--Hermes-Agent.md",
+        tmp_path / "catalog" / "repositories" / "ExampleOrg--SampleTool.md",
         "# Repo card\n[[README]]\n",
     )
     write(tmp_path / "scratch" / "Bad Name.md", "# Bad Name\n[[README]]\n")
@@ -435,6 +634,16 @@ def test_summary_uses_configured_naming_policy_exemptions(tmp_path: Path) -> Non
     assert summary["naming_policy_violations"] == [
         {"path": "scratch/Bad Name.md", "expected_slug": "scratch/bad-name"}
     ]
+
+
+def test_summary_can_disable_naming_policy(tmp_path: Path) -> None:
+    write(tmp_path / ".wikic" / "config.json", '{"naming_policy_enabled": false}')
+    write(tmp_path / "Bad Name.md", "# Bad Name\n")
+
+    summary = build_summary(tmp_path)
+
+    assert summary["naming_policy_violation_count"] == 0
+    assert summary["naming_policy_violations"] == []
 
 
 def test_invalid_naming_policy_exemption_config_errors(tmp_path: Path) -> None:
@@ -898,15 +1107,3 @@ def test_split_frontmatter_leaves_nested_maps_empty():
 
     assert frontmatter["config"] == ""
     assert "nested" not in frontmatter
-
-
-def test_okf_suggests_from_the_most_specific_folder(tmp_path: Path) -> None:
-    """A nested folder wins over its parents, and an unknown path suggests nothing."""
-    write(tmp_path / "wiki" / "tools" / "ripgrep.md", "---\ntitle: rg\n---\n# rg\n")
-    write(tmp_path / "wiki" / "intel" / "acme" / "widget.md", "---\ntitle: w\n---\n# w\n")
-
-    readiness = core_build_okf_readiness(tmp_path)
-    suggestions = {i["path"]: i.get("suggested_type") for i in readiness["missing_type_pages"]}
-
-    assert suggestions["wiki/tools/ripgrep.md"] == "tool"
-    assert suggestions.get("wiki/intel/acme/widget.md") is None
