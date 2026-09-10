@@ -104,6 +104,22 @@ def test_cli_doctor_profile_okf_reports_profile_diagnostics(tmp_path: Path) -> N
     assert payload["issues"][0]["code"] == "WK011"
 
 
+def test_cli_uses_configured_okf_without_profile_flag(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps({"okf": {"enabled": True, "version": "0.2", "exclude": []}}),
+    )
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
+
+    summary = run_cli(tmp_path, "summary", "--json")
+    doctor = run_cli(tmp_path, "doctor", "--ignore-orphans", "--json")
+
+    assert summary.returncode == 0
+    assert json.loads(summary.stdout)["okf_readiness"]["invalid_type_count"] == 1
+    assert doctor.returncode == 1
+    assert json.loads(doctor.stdout)["issues"][0]["code"] == "WK011"
+
+
 def test_cli_catalog_writes_json_artifact(tmp_path: Path) -> None:
     write(tmp_path / "index.md", "# Home\n")
 

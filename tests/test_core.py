@@ -221,6 +221,87 @@ def test_okf_profile_is_opt_in_for_summary_and_doctor(tmp_path: Path) -> None:
     assert any(issue["code"] == "WK011" for issue in okf_doctor["issues"])
 
 
+def test_config_enables_okf_and_vault_policy_together(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps(
+            {
+                "okf": {"enabled": True, "version": "0.2", "exclude": []},
+                "vault_policy": {
+                    "allowed_types": ["reference"],
+                    "curated_prefixes": ["knowledge/"],
+                },
+            }
+        ),
+    )
+    write(tmp_path / "knowledge" / "missing.md", "# Missing\n")
+
+    summary = build_summary(tmp_path)
+    doctor = run_doctor(tmp_path, ignore_orphans=True).to_dict()
+
+    assert summary["okf_readiness"]["missing_frontmatter_count"] == 1
+    assert summary["vault_policy_readiness"]["pages_missing_type"] == 1
+    assert {issue["code"] for issue in doctor["issues"]} == {"WK010", "WK020"}
+
+
+def test_explicit_empty_vault_policy_stays_inactive(tmp_path: Path) -> None:
+    write(tmp_path / ".wikic" / "config.json", json.dumps({"vault_policy": {}}))
+    write(tmp_path / "page.md", "# Page\n")
+
+    summary = build_summary(tmp_path)
+    doctor = run_doctor(tmp_path, ignore_orphans=True).to_dict()
+
+    assert "vault_policy_readiness" not in summary
+    assert doctor["issues"] == []
+
+
+def test_okf_exclusions_do_not_remove_files_from_wikic_catalog(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps({"okf": {"enabled": True, "version": "0.2", "exclude": ["work-notes/**"]}}),
+    )
+    write(tmp_path / "concept.md", "---\ntype: concept\n---\n# Concept\n")
+    write(tmp_path / "work-notes" / "CONTRIBUTING.md", "# Contributing\n")
+
+    summary = build_summary(tmp_path)
+    catalog = build_catalog(tmp_path)
+
+    assert summary["okf_readiness"]["conformant"] is True
+    assert summary["okf_readiness"]["excluded_markdown_count"] == 1
+    assert summary["okf_readiness"]["concept_document_count"] == 1
+    assert catalog["page_count"] == 2
+
+
+def test_okf_config_rejects_unsupported_version(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps({"okf": {"enabled": True, "version": "0.3", "exclude": []}}),
+    )
+
+    with pytest.raises(ValueError, match="only 0.2 is supported"):
+        build_summary(tmp_path)
+
+
+def test_okf_log_accepts_canonical_frontmatter_shape(tmp_path: Path) -> None:
+    write(
+        tmp_path / "log.md",
+        """---
+title: Knowledge Log
+type: log
+---
+# Knowledge Log
+
+## 2026-09-10
+- Added a concept.
+""",
+    )
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["invalid_log_files"] == []
+    assert readiness["conformant"] is True
+
+
 def test_vault_policy_is_configured_separately_from_okf(tmp_path: Path) -> None:
     write(
         tmp_path / ".wikic" / "config.json",

@@ -68,15 +68,16 @@ Writes `llms.txt`, a compact agent navigation file grouped by page type.
 
 Prints a compact deterministic advisor snapshot: catalog/doctor/graph stats, top-level counts, frontmatter coverage and exact `frontmatter_gaps`, timeline coverage, action/stale marker hotspots, index coverage, large-page pressure, generated-report policy violations, largest pages, and naming-policy violations.
 
-With `--profile okf-v0.2 --json`, `summary` includes an `okf_readiness` object that validates the normative conformance rules in the public [Open Knowledge Format v0.2 specification](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/0b87c52c6ef999286c745e19998fdfcd03d5dbee/SPEC.md). It inspects every Markdown file under the declared bundle root, including hidden directories: concept documents need valid UTF-8, parseable YAML frontmatter, and a non-empty string `type`; exact lowercase reserved `index.md` and `log.md` files are validated separately. Unknown types, additional keys, nested YAML, missing optional metadata, broken links, and absent indexes are accepted as the specification requires.
+When `.wikic/config.json` enables OKF, `summary`, `doctor`, and `health` automatically validate the normative conformance rules in the public [Open Knowledge Format v0.2 specification](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/0b87c52c6ef999286c745e19998fdfcd03d5dbee/SPEC.md). The check inspects every non-excluded Markdown file under the root, including hidden directories: concept documents need valid UTF-8, parseable YAML frontmatter, and a non-empty string `type`; exact lowercase reserved `index.md` and `log.md` files are validated separately. Unknown types, additional keys, nested YAML, missing optional metadata, broken links, and absent indexes are accepted as the specification requires.
 
-Producer-specific taxonomy, provenance, path, and export-shape opinions belong to the separate `vault-policy` profile. This profile has no built-in taxonomy or path scope: it runs only rules supplied by the vault's `.wikic/config.json`. `doctor`/`health` expose OKF diagnostics as WK010-WK015 and configured vault-policy diagnostics as WK020-WK025. The default profile remains Wikic's own structural health check.
+Producer-specific taxonomy, provenance, path, and export-shape opinions belong to `vault_policy`. It has no built-in taxonomy or path scope and is automatically checked only when its configuration object is non-empty. `doctor`/`health` expose OKF diagnostics as WK010-WK015 and configured vault-policy diagnostics as WK020-WK025. Without either configured audit, Wikic runs only its ordinary structural health checks. `--profile okf-v0.2` and `--profile vault-policy` remain available as advanced, one-command overrides that force-add the named audit.
 
 ### Configuration and defaults
 
 Wikic keeps its configurable product-opinion defaults deliberately small:
 
 - `exclude` extends `archive/**`, `archives/**`, `raw/**`, `generated/**`, and `tmp/**` unless `exclude_mode` is `replace`.
+- `okf.exclude` applies only to OKF validation; it does not remove files from Wikic's ordinary catalog or graph.
 - Timeline coverage applies to `company`, `person`, `project`, and `tool` types, with no path-prefix assumptions.
 - Large-page pressure starts at 1,000 words.
 - No root files, vault taxonomy, provenance aliases, or custom frontmatter allowlist are required by default.
@@ -88,6 +89,11 @@ Configure a vault in `.wikic/config.json`:
 
 ```json
 {
+  "okf": {
+    "enabled": true,
+    "version": "0.2",
+    "exclude": [".github/**", ".claude/**", "raw/**", "archive/**"]
+  },
   "exclude_mode": "replace",
   "exclude": ["build/**", "drafts/**"],
   "required_root_files": ["index.md", "policy/schema.md"],

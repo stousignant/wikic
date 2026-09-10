@@ -42,7 +42,7 @@ def add_profile_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         choices=[OKF_PROFILE, VAULT_POLICY_PROFILE],
-        help="Opt-in standards or configured policy audit profile.",
+        help="Force-add an audit profile beyond checks enabled in .wikic/config.json.",
     )
 
 

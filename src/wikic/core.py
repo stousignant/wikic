@@ -82,6 +82,7 @@ def load_config(root: str | Path) -> dict[str, Any]:
         "naming_policy_exemptions": [],
         "naming_policy_enabled": True,
         "generated_report_policy": {"rules": []},
+        "okf": {"enabled": False, "version": "0.2", "exclude": []},
         "vault_policy": {},
     }
     config_path = root_path / ".wikic" / "config.json"
@@ -172,6 +173,9 @@ def load_config(root: str | Path) -> dict[str, Any]:
             raw["generated_report_policy"], config_path
         )
 
+    if "okf" in raw:
+        merged["okf"] = _validate_okf_config(raw["okf"], config_path)
+
     if "vault_policy" in raw:
         merged["vault_policy"] = _validate_vault_policy(raw["vault_policy"], config_path)
 
@@ -185,6 +189,7 @@ def load_config(root: str | Path) -> dict[str, Any]:
             "naming_policy_exemptions",
             "naming_policy_enabled",
             "generated_report_policy",
+            "okf",
             "vault_policy",
         }:
             merged[key] = value
@@ -234,6 +239,23 @@ def _validate_generated_report_policy(value: Any, config_path: Path) -> dict[str
             }
         )
     return {"rules": normalized_rules}
+
+
+def _validate_okf_config(value: Any, config_path: Path) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid config value for 'okf' in {config_path}: expected object")
+    enabled = value.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(
+            f"Invalid config value for 'okf.enabled' in {config_path}: expected boolean"
+        )
+    version = value.get("version", "0.2")
+    if version != "0.2":
+        raise ValueError(
+            f"Invalid config value for 'okf.version' in {config_path}: only 0.2 is supported"
+        )
+    exclude = _validate_string_list(value.get("exclude", []), "okf.exclude", config_path)
+    return {"enabled": enabled, "version": version, "exclude": exclude}
 
 
 def _validate_string_list(value: Any, key: str, config_path: Path) -> list[str]:
@@ -290,6 +312,10 @@ def _validate_vault_policy(value: Any, config_path: Path) -> dict[str, Any]:
         )
     normalized["type_suggestions"] = dict(suggestions)
     return normalized
+
+
+def _vault_policy_is_enabled(config: dict[str, Any]) -> bool:
+    return any(bool(value) for value in config["vault_policy"].values())
 
 
 def _effective_excludes(
@@ -645,7 +671,7 @@ def run_doctor(
                     }
                 )
 
-    if profile == OKF_PROFILE:
+    if config["okf"]["enabled"] or profile == OKF_PROFILE:
         okf_readiness = build_okf_readiness(root_path)
         for item in okf_readiness["missing_frontmatter_pages"]:
             issues.append(
@@ -703,7 +729,7 @@ def run_doctor(
                 }
             )
 
-    if profile == VAULT_POLICY_PROFILE:
+    if _vault_policy_is_enabled(config) or profile == VAULT_POLICY_PROFILE:
         policy_readiness = build_vault_policy_readiness(root_path)
         for item in policy_readiness["missing_type_pages"]:
             issue: dict[str, Any] = {
@@ -1541,11 +1567,9 @@ def _okf_index_issue(rel_path: str, text: str, root_index: bool) -> dict[str, An
 
 
 def _okf_log_issue(rel_path: str, text: str) -> dict[str, Any] | None:
-    has_frontmatter, malformed, _, body = _parse_yaml_frontmatter(text)
+    _, malformed, _, body = _parse_yaml_frontmatter(text)
     if malformed:
         return {"path": rel_path, "reason": "malformed_frontmatter"}
-    if has_frontmatter:
-        return {"path": rel_path, "reason": "frontmatter_not_allowed"}
     lines = body.splitlines()
     nonblank = [index for index, line in enumerate(lines) if line.strip()]
     if not nonblank or re.fullmatch(r"#\s+\S.*", lines[nonblank[0]]) is None:
@@ -1585,6 +1609,8 @@ def _okf_log_issue(rel_path: str, text: str) -> dict[str, Any] | None:
 def build_okf_readiness(root: str | Path) -> dict[str, Any]:
     """Validate the normative conformance rules in the public OKF v0.2 specification."""
     root_path = Path(root).resolve()
+    config = load_config(root_path)
+    exclude_patterns = config["okf"]["exclude"]
     missing_frontmatter: list[dict[str, str]] = []
     malformed_frontmatter: list[dict[str, str]] = []
     invalid_type: list[dict[str, Any]] = []
@@ -1594,7 +1620,15 @@ def build_okf_readiness(root: str | Path) -> dict[str, Any]:
     concept_count = 0
     reserved_count = 0
 
-    for path in _okf_markdown_files(root_path):
+    all_markdown_files = _okf_markdown_files(root_path)
+    markdown_files = [
+        path
+        for path in all_markdown_files
+        if not _matches_any_exclude_pattern(
+            path.relative_to(root_path).as_posix(), exclude_patterns
+        )
+    ]
+    for path in markdown_files:
         rel_path = path.relative_to(root_path).as_posix()
         try:
             text = path.read_text(encoding="utf-8")
@@ -1639,6 +1673,8 @@ def build_okf_readiness(root: str | Path) -> dict[str, Any]:
         "profile": OKF_PROFILE,
         "okf_version": "0.2",
         "specification": OKF_SPEC_URL,
+        "exclude_patterns": exclude_patterns,
+        "excluded_markdown_count": len(all_markdown_files) - len(markdown_files),
         "conformant": conformant,
         "concept_document_count": concept_count,
         "reserved_file_count": reserved_count,
@@ -1662,7 +1698,7 @@ def build_summary(root: str | Path, *, profile: str | None = None) -> dict[str, 
     root_path = Path(root).resolve()
     catalog = build_catalog(root_path)
     graph = build_graph(catalog)
-    doctor = run_doctor(root_path)
+    doctor = run_doctor(root_path, profile=profile)
     pages = catalog["pages"]
     config = load_config(root_path)
     included_files, _ = markdown_files(root_path, exclude_patterns=config.get("exclude", []))
@@ -1758,9 +1794,9 @@ def build_summary(root: str | Path, *, profile: str | None = None) -> dict[str, 
         "naming_policy_violation_count": naming_policy_violation_count,
         "naming_policy_violations": sorted(naming_policy_violations, key=lambda item: item["path"]),
     }
-    if profile == OKF_PROFILE:
+    if config["okf"]["enabled"] or profile == OKF_PROFILE:
         payload["okf_readiness"] = build_okf_readiness(root_path)
-    elif profile == VAULT_POLICY_PROFILE:
+    if _vault_policy_is_enabled(config) or profile == VAULT_POLICY_PROFILE:
         payload["vault_policy_readiness"] = build_vault_policy_readiness(root_path)
     return payload
 
