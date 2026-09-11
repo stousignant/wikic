@@ -49,6 +49,8 @@ Runs deterministic health checks:
 - `WK001` — missing internal wikilink or Markdown-link target.
 - `WK002` — isolated page with no inbound and no outbound links.
 - `WK003` — missing configured root file when `--require-vault-files` is set.
+- `WK004` — ambiguous internal link target.
+- `WK005` — unsafe relative Markdown link that escapes the vault or uses a backslash separator.
 
 Exit code is `0` when clean, `1` when issues are found.
 

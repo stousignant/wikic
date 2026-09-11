@@ -17,9 +17,9 @@ import yaml
 LINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 LINK_OCCURRENCE_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)((?:#[^\]|]+)?(?:\|[^\]]+)?)\]\]")
 MARKDOWN_LINK_START_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(")
-FENCED_CODE_RE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$")
-INLINE_CODE_RE = re.compile(r"(?s)(`+).*?\1")
-HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
+HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?(?:-->|$)")
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 WORD_RE = re.compile(r"\b\w+\b")
 ACTION_MARKER_RE = re.compile(r"(?im)(?:^\s*(?:[-*]\s*)?(?:TODO|FIXME|ACTION|NEXT)\b|- \[ \])")
@@ -448,12 +448,58 @@ def page_title(slug: str, frontmatter: dict[str, Any], body: str) -> str:
 
 
 def _mask_markdown_nonlinks(body: str) -> str:
-    def blank(match: re.Match[str]) -> str:
-        return re.sub(r"[^\n]", " ", match.group(0))
+    chars = list(body)
 
-    body = HTML_COMMENT_RE.sub(blank, body)
-    body = FENCED_CODE_RE.sub(blank, body)
-    return INLINE_CODE_RE.sub(blank, body)
+    def blank(start: int, end: int) -> None:
+        for offset in range(start, end):
+            if chars[offset] != "\n":
+                chars[offset] = " "
+
+    for match in HTML_COMMENT_RE.finditer(body):
+        blank(match.start(), match.end())
+
+    fence: tuple[str, int] | None = None
+    cursor = 0
+    for line in body.splitlines(keepends=True):
+        visible = "".join(chars[cursor : cursor + len(line)]).rstrip("\r\n")
+        if fence is not None:
+            blank(cursor, cursor + len(line))
+            marker, width = fence
+            if re.fullmatch(rf" {{0,3}}{re.escape(marker)}{{{width},}}[ \t]*", visible):
+                fence = None
+        else:
+            opener = FENCE_OPEN_RE.match(visible)
+            if opener is not None:
+                run = opener.group(1)
+                fence = (run[0], len(run))
+                blank(cursor, cursor + len(line))
+            elif INDENTED_CODE_RE.match(visible):
+                blank(cursor, cursor + len(line))
+        cursor += len(line)
+
+    masked = "".join(chars)
+    cursor = 0
+    while cursor < len(masked):
+        if masked[cursor] != "`":
+            cursor += 1
+            continue
+        width = 1
+        while cursor + width < len(masked) and masked[cursor + width] == "`":
+            width += 1
+        delimiter = "`" * width
+        closing = masked.find(delimiter, cursor + width)
+        while closing != -1 and (
+            (closing > 0 and masked[closing - 1] == "`")
+            or (closing + width < len(masked) and masked[closing + width] == "`")
+        ):
+            closing = masked.find(delimiter, closing + width)
+        if closing == -1:
+            cursor += width
+            continue
+        blank(cursor, closing + width)
+        masked = "".join(chars)
+        cursor = closing + width
+    return "".join(chars)
 
 
 def _markdown_link_destinations(body: str) -> list[str]:
@@ -527,6 +573,8 @@ def _markdown_destination(
         return None, None
     path = unquote(parsed.path)
     path = re.sub(r"\\([!\"#$%&'()*+,./:;<=>?@\[\]^_`{|}~-])", r"\1", path)
+    if "\\" in path:
+        return None, "invalid_path_separator"
     if not path or path.startswith("/"):
         return None, None
     if path.endswith("/"):
@@ -549,12 +597,13 @@ def _extract_links_and_invalid(
     seen: set[str] = set()
     links: list[str] = []
     invalid: list[dict[str, str]] = []
-    for match in LINK_RE.finditer(body):
+    masked_body = _mask_markdown_nonlinks(body)
+    for match in LINK_RE.finditer(masked_body):
         slug = normalize_slug(match.group(1))
         if slug and slug not in seen:
             links.append(slug)
             seen.add(slug)
-    for destination in _markdown_link_destinations(body):
+    for destination in _markdown_link_destinations(masked_body):
         slug, reason = _markdown_destination(destination, source_path)
         if reason is not None:
             invalid.append({"target": destination, "reason": reason})
@@ -777,6 +826,25 @@ def run_doctor(
             issues.append(issue)
             continue
 
+        if edge["resolution"] in {"outside_vault", "invalid_path_separator"}:
+            reason = edge["resolution"]
+            message = (
+                "Relative Markdown link escapes the vault root."
+                if reason == "outside_vault"
+                else "Relative Markdown link contains an invalid backslash path separator."
+            )
+            issues.append(
+                {
+                    "code": "WK005",
+                    "severity": "error",
+                    "page": edge["source"],
+                    "target": edge["raw_target"],
+                    "reason": reason,
+                    "message": message,
+                }
+            )
+            continue
+
         if edge["resolution"] == "ambiguous":
             issues.append(
                 {
@@ -941,6 +1009,11 @@ def run_doctor(
             "edges": len(graph["edges"]),
             "resolved_edges": sum(1 for edge in graph["edges"] if edge["resolved"]),
             "missing_edges": sum(1 for edge in graph["edges"] if edge["resolution"] == "missing"),
+            "invalid_edges": sum(
+                1
+                for edge in graph["edges"]
+                if edge["resolution"] in {"outside_vault", "invalid_path_separator"}
+            ),
             "ambiguous_edges": sum(
                 1 for edge in graph["edges"] if edge["resolution"] == "ambiguous"
             ),
@@ -1909,6 +1982,11 @@ def build_summary(root: str | Path, *, profile: str | None = None) -> dict[str, 
             "edges": len(graph["edges"]),
             "resolved_edges": sum(1 for edge in graph["edges"] if edge["resolved"]),
             "missing_edges": sum(1 for edge in graph["edges"] if edge["resolution"] == "missing"),
+            "invalid_edges": sum(
+                1
+                for edge in graph["edges"]
+                if edge["resolution"] in {"outside_vault", "invalid_path_separator"}
+            ),
             "ambiguous_edges": sum(
                 1 for edge in graph["edges"] if edge["resolution"] == "ambiguous"
             ),

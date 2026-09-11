@@ -110,6 +110,13 @@ def test_catalog_reports_relative_links_that_escape_the_vault_as_missing(tmp_pat
     assert edge["target"] is None
     assert edge["raw_target"] == "../../outside.md"
     assert edge["resolution"] == "outside_vault"
+    report = run_doctor(tmp_path, ignore_orphans=True)
+    assert report.ok is False
+    assert report.exit_code == 1
+    assert report.summary["invalid_edges"] == 1
+    assert [(issue["code"], issue.get("reason")) for issue in report.issues] == [
+        ("WK005", "outside_vault")
+    ]
 
 
 def test_markdown_links_use_raw_source_paths_and_markdown_escapes(tmp_path: Path) -> None:
@@ -118,24 +125,41 @@ def test_markdown_links_use_raw_source_paths_and_markdown_escapes(tmp_path: Path
     write(tmp_path / "home.md", "# Root home\n")
     write(tmp_path / "escaped.md", "# Escaped\n[Parentheses](foo\\(bar\\).md)\n")
     write(tmp_path / "foo(bar).md", "# Parentheses\n")
+    write(tmp_path / "collision.md", "# Collision\n[Victim](dir\\victim.md)\n")
+    write(tmp_path / "dir" / "victim.md", "# Victim\n")
 
     catalog = build_catalog(tmp_path)
+    graph = build_graph(catalog)
 
     assert catalog["pages"]["punct/guide"]["outlinks"] == ["punct/home"]
     assert catalog["pages"]["escaped"]["outlinks"] == ["foobar"]
+    assert catalog["pages"]["collision"]["outlinks"] == []
+    assert catalog["pages"]["collision"]["invalid_outlinks"] == [
+        {"target": "dir\\victim.md", "reason": "invalid_path_separator"}
+    ]
+    edge = next(edge for edge in graph["edges"] if edge["source"] == "collision")
+    assert edge["resolved"] is False
+    assert edge["resolution"] == "invalid_path_separator"
 
 
 def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     body = (
-        "# Examples\n\n```md\n[Code](code.md)\n```\n\n"
-        "`[Inline](inline.md)`\n\n<!-- [Comment](comment.md) -->\n"
+        "# Examples\n\n```md\n[Code](code.md) [[WikiCode]]\n```\n\n"
+        "`[Inline](inline.md) [[WikiInline]]`\n\n"
+        "<!-- [Comment](comment.md) [[WikiComment]] -->\n"
     )
     write(tmp_path / "index.md", body)
+    write(tmp_path / "long-fence.md", "~~~md\n[Fake](fake.md)\n~~~~\n")
+    write(tmp_path / "unclosed-fence.md", "```md\n[Fake](fake.md)\n")
+    write(tmp_path / "indented.md", "    [Fake](fake.md) [[WikiFake]]\n")
+    write(tmp_path / "unclosed-comment.md", "<!-- [Fake](fake.md) [[WikiFake]]\n")
 
     catalog = build_catalog(tmp_path)
     readiness = build_okf_readiness(tmp_path)
 
     assert catalog["pages"]["index"]["outlinks"] == []
+    for slug in ("long-fence", "unclosed-fence", "indented", "unclosed-comment"):
+        assert catalog["pages"][slug]["outlinks"] == []
     assert readiness["invalid_index_files"] == [
         {"path": "index.md", "reason": "missing_markdown_link_entry"}
     ]
