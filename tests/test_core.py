@@ -94,13 +94,51 @@ def test_catalog_and_graph_resolve_relative_markdown_links(tmp_path: Path) -> No
 def test_catalog_reports_relative_links_that_escape_the_vault_as_missing(tmp_path: Path) -> None:
     write(tmp_path / "guides" / "index.md", "# Guides\n\n- [Escape](../../outside.md)\n")
     write(tmp_path / "outside.md", "---\ntype: page\n---\n# Outside\n")
+    write(
+        tmp_path / "invalid-outside-vault-link" / "outside.md",
+        "---\ntype: page\n---\n# Collision probe\n",
+    )
 
-    graph = build_graph(build_catalog(tmp_path))
+    catalog = build_catalog(tmp_path)
+    graph = build_graph(catalog)
 
+    page = catalog["pages"]["guides/index"]
+    assert page["outlinks"] == []
+    assert page["invalid_outlinks"] == [{"target": "../../outside.md", "reason": "outside_vault"}]
     edge = next(edge for edge in graph["edges"] if edge["source"] == "guides/index")
     assert edge["resolved"] is False
     assert edge["target"] is None
-    assert edge["raw_target"] == "invalid-outside-vault-link/outside"
+    assert edge["raw_target"] == "../../outside.md"
+    assert edge["resolution"] == "outside_vault"
+
+
+def test_markdown_links_use_raw_source_paths_and_markdown_escapes(tmp_path: Path) -> None:
+    write(tmp_path / "punct" / "!!!" / "guide.md", "# Guide\n[Home](../home.md)\n")
+    write(tmp_path / "punct" / "home.md", "# Nested home\n")
+    write(tmp_path / "home.md", "# Root home\n")
+    write(tmp_path / "escaped.md", "# Escaped\n[Parentheses](foo\\(bar\\).md)\n")
+    write(tmp_path / "foo(bar).md", "# Parentheses\n")
+
+    catalog = build_catalog(tmp_path)
+
+    assert catalog["pages"]["punct/guide"]["outlinks"] == ["punct/home"]
+    assert catalog["pages"]["escaped"]["outlinks"] == ["foobar"]
+
+
+def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
+    body = (
+        "# Examples\n\n```md\n[Code](code.md)\n```\n\n"
+        "`[Inline](inline.md)`\n\n<!-- [Comment](comment.md) -->\n"
+    )
+    write(tmp_path / "index.md", body)
+
+    catalog = build_catalog(tmp_path)
+    readiness = build_okf_readiness(tmp_path)
+
+    assert catalog["pages"]["index"]["outlinks"] == []
+    assert readiness["invalid_index_files"] == [
+        {"path": "index.md", "reason": "missing_markdown_link_entry"}
+    ]
 
 
 def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:

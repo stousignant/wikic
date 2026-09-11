@@ -17,7 +17,9 @@ import yaml
 LINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 LINK_OCCURRENCE_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)((?:#[^\]|]+)?(?:\|[^\]]+)?)\]\]")
 MARKDOWN_LINK_START_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(")
-OUTSIDE_VAULT_LINK_PREFIX = "invalid-outside-vault-link"
+FENCED_CODE_RE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$")
+INLINE_CODE_RE = re.compile(r"(?s)(`+).*?\1")
+HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 WORD_RE = re.compile(r"\b\w+\b")
 ACTION_MARKER_RE = re.compile(r"(?im)(?:^\s*(?:[-*]\s*)?(?:TODO|FIXME|ACTION|NEXT)\b|- \[ \])")
@@ -445,7 +447,17 @@ def page_title(slug: str, frontmatter: dict[str, Any], body: str) -> str:
     return slug.rsplit("/", 1)[-1].replace("-", " ").title()
 
 
+def _mask_markdown_nonlinks(body: str) -> str:
+    def blank(match: re.Match[str]) -> str:
+        return re.sub(r"[^\n]", " ", match.group(0))
+
+    body = HTML_COMMENT_RE.sub(blank, body)
+    body = FENCED_CODE_RE.sub(blank, body)
+    return INLINE_CODE_RE.sub(blank, body)
+
+
 def _markdown_link_destinations(body: str) -> list[str]:
+    body = _mask_markdown_nonlinks(body)
     destinations: list[str] = []
     for match in MARKDOWN_LINK_START_RE.finditer(body):
         cursor = match.end()
@@ -504,44 +516,56 @@ def _markdown_link_destinations(body: str) -> list[str]:
     return destinations
 
 
-def _markdown_destination_slug(destination: str, source_slug: str | None) -> str | None:
+def _markdown_destination(
+    destination: str, source_path: str | None
+) -> tuple[str | None, str | None]:
     destination = destination.strip()
     if not destination or destination.startswith("#"):
-        return None
+        return None, None
     parsed = urlsplit(destination)
     if parsed.scheme or parsed.netloc:
-        return None
-    path = unquote(parsed.path).replace("\\", "/")
+        return None, None
+    path = unquote(parsed.path)
+    path = re.sub(r"\\([!\"#$%&'()*+,./:;<=>?@\[\]^_`{|}~-])", r"\1", path)
     if not path or path.startswith("/"):
-        return None
+        return None, None
     if path.endswith("/"):
         path += "index.md"
     if PurePosixPath(path).suffix and not path.casefold().endswith(".md"):
-        return None
+        return None, None
     if path.casefold().endswith(".md"):
         path = path[:-3]
     target = path
-    if source_slug is not None:
-        target = posixpath.normpath(posixpath.join(posixpath.dirname(source_slug), path))
+    if source_path is not None:
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(source_path), path))
     if target == ".." or target.startswith("../"):
-        escaped = normalize_slug(target.removeprefix("../")) or "unknown"
-        return f"{OUTSIDE_VAULT_LINK_PREFIX}/{escaped}"
-    return normalize_slug(target)
+        return None, "outside_vault"
+    return normalize_slug(target), None
 
 
-def extract_links(body: str, source_slug: str | None = None) -> list[str]:
+def _extract_links_and_invalid(
+    body: str, source_path: str | None = None
+) -> tuple[list[str], list[dict[str, str]]]:
     seen: set[str] = set()
     links: list[str] = []
+    invalid: list[dict[str, str]] = []
     for match in LINK_RE.finditer(body):
         slug = normalize_slug(match.group(1))
         if slug and slug not in seen:
             links.append(slug)
             seen.add(slug)
     for destination in _markdown_link_destinations(body):
-        slug = _markdown_destination_slug(destination, source_slug)
-        if slug and slug not in seen:
+        slug, reason = _markdown_destination(destination, source_path)
+        if reason is not None:
+            invalid.append({"target": destination, "reason": reason})
+        elif slug and slug not in seen:
             links.append(slug)
             seen.add(slug)
+    return links, invalid
+
+
+def extract_links(body: str, source_path: str | None = None) -> list[str]:
+    links, _ = _extract_links_and_invalid(body, source_path)
     return links
 
 
@@ -562,6 +586,7 @@ def build_catalog(root: str | Path) -> dict[str, Any]:
             aliases = []
         rel = path.relative_to(root_path).with_suffix("").as_posix()
         slug = normalize_slug(rel)
+        outlinks, invalid_outlinks = _extract_links_and_invalid(body, rel)
         pages[slug] = {
             "slug": slug,
             "basename": slug.rsplit("/", 1)[-1],
@@ -572,7 +597,8 @@ def build_catalog(root: str | Path) -> dict[str, Any]:
             "status": frontmatter.get("status"),
             "summary": frontmatter.get("summary"),
             "tags": frontmatter.get("tags", []),
-            "outlinks": extract_links(body, slug),
+            "outlinks": outlinks,
+            "invalid_outlinks": invalid_outlinks,
             "word_count": len(WORD_RE.findall(body)),
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         }
@@ -679,6 +705,17 @@ def build_graph(catalog: dict[str, Any]) -> dict[str, Any]:
                     "resolved": resolution["resolved"],
                     "resolution": resolution["resolution"],
                     "candidates": resolution["candidates"],
+                }
+            )
+        for invalid in page.get("invalid_outlinks", []):
+            edges.append(
+                {
+                    "source": slug,
+                    "raw_target": invalid["target"],
+                    "target": None,
+                    "resolved": False,
+                    "resolution": invalid["reason"],
+                    "candidates": [],
                 }
             )
     return {"schema_version": 1, "nodes": nodes, "edges": edges}
@@ -1664,12 +1701,11 @@ def _okf_index_issue(rel_path: str, text: str, root_index: bool) -> dict[str, An
     headings = list(re.finditer(r"(?m)^(#{1,6})\s+\S.*$", body))
     if not headings:
         return {"path": rel_path, "reason": "missing_section_heading"}
-    source_slug = normalize_slug(PurePosixPath(rel_path).with_suffix("").as_posix())
+    source_path = PurePosixPath(rel_path).with_suffix("").as_posix()
     link_slugs = [
         slug
         for destination in _markdown_link_destinations(body)
-        if (slug := _markdown_destination_slug(destination, source_slug)) is not None
-        and not slug.startswith(f"{OUTSIDE_VAULT_LINK_PREFIX}/")
+        if (slug := _markdown_destination(destination, source_path)[0]) is not None
     ]
     if not link_slugs:
         return {"path": rel_path, "reason": "missing_markdown_link_entry"}
