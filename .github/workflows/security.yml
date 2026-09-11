@@ -50,26 +50,39 @@ jobs:
           sudo install -m 0755 trufflehog /usr/local/bin/trufflehog
 
       - name: gitleaks (every ref, full history)
-        run: gitleaks git -v --redact --log-opts="--all" .
+        run: |
+          set -euo pipefail
+          # Even redacted findings may contain sensitive paths or context.
+          # Never copy scanner diagnostics into public logs or artifacts.
+          status=0
+          gitleaks git --redact --log-opts="--all" . >/dev/null 2>&1 || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Credential scan blocked publication; inspect locally."
+            exit "$status"
+          fi
+          echo "Credential history scan passed."
 
       - name: trufflehog (verified and unverifiable)
         run: |
           set -euo pipefail
-          # --results=verified,unknown on purpose: gating on verified alone
-          # discards live credentials whose verifier happened to be unreachable.
-          # --no-update: the self-updater cannot rewrite a root-owned binary
-          # and fails the step even when the scan itself is clean.
+          umask 077
+          findings=$(mktemp)
+          trap 'rm -f "$findings"' EXIT
+          # Unknown results also fail: an unreachable verifier is not clean.
+          # Raw output never reaches public logs or uploaded artifacts.
+          status=0
           trufflehog git file://. --results=verified,unknown --json --fail --no-update \
-            | tee trufflehog-findings.json
-          if [ -s trufflehog-findings.json ]; then
-            echo "::error::trufflehog reported findings"
+            >"$findings" 2>/dev/null || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Verification scan failed or found credentials; inspect locally."
+            exit "$status"
+          fi
+          if [ -s "$findings" ]; then
+            echo "::error::Verification scan returned findings; inspect locally."
             exit 1
           fi
+          echo "Credential verification scan passed."
 
       - name: Identity and path sweep
-        env:
-          # Optional. Repository secret holding one regex per line for
-          # environment-specific terms that must never be published. Absent
-          # secret means built-in structural patterns only.
-          LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
-        run: python3 scripts/leak_sweep.py --messages
+        # Private patterns belong to the local publication gate, never PR code.
+        run: python3 scripts/leak_sweep.py --history --credentials
