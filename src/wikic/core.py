@@ -449,6 +449,14 @@ def page_title(slug: str, frontmatter: dict[str, Any], body: str) -> str:
 def _mask_markdown_nonlinks(body: str) -> str:
     chars = list(body)
 
+    def is_escaped(offset: int) -> bool:
+        backslashes = 0
+        offset -= 1
+        while offset >= 0 and body[offset] == "\\":
+            backslashes += 1
+            offset -= 1
+        return backslashes % 2 == 1
+
     def blank(start: int, end: int) -> None:
         for offset in range(start, end):
             if chars[offset] != "\n":
@@ -497,7 +505,7 @@ def _mask_markdown_nonlinks(body: str) -> str:
             cursor = end
             continue
 
-        if fence is None and body[cursor] == "`":
+        if fence is None and body[cursor] == "`" and not is_escaped(cursor):
             width = 1
             while cursor + width < len(body) and body[cursor + width] == "`":
                 width += 1
@@ -506,6 +514,7 @@ def _mask_markdown_nonlinks(body: str) -> str:
             while closing != -1 and (
                 (closing > 0 and body[closing - 1] == "`")
                 or (closing + width < len(body) and body[closing + width] == "`")
+                or is_escaped(closing)
             ):
                 closing = body.find(delimiter, closing + width)
             if closing != -1:

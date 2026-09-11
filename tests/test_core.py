@@ -174,6 +174,7 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     )
     write(tmp_path / "comment-inline.md", "`<!--`\n[Real](real.md)\n")
     write(tmp_path / "comment-indented.md", "    <!--\n[Real](real.md)\n")
+    write(tmp_path / "escaped-backticks.md", "\\` [Real](real.md) \\`\n")
     write(
         tmp_path / "fence-in-comment.md",
         "<!--\n```md\n[Hidden](hidden.md)\n-->\n[Real](real.md)\n",
@@ -193,6 +194,7 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
         "comment-in-fence",
         "comment-inline",
         "comment-indented",
+        "escaped-backticks",
         "fence-in-comment",
         "comment-in-closing-fence",
     ):
