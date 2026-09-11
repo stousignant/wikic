@@ -58,6 +58,29 @@ type: tool
     assert len(page["sha256"]) == 64
 
 
+def test_catalog_and_graph_resolve_relative_markdown_links(tmp_path: Path) -> None:
+    write(
+        tmp_path / "guides" / "index.md",
+        "# Guides\n\n- [Child](child%20page.md)\n- [Home](../home.md#Start)\n"
+        "- [External](https://example.test/page.md)\n![Image](diagram.md)\n",
+    )
+    write(tmp_path / "guides" / "child page.md", "---\ntype: guide\n---\n# Child\n")
+    write(tmp_path / "home.md", "---\ntype: page\n---\n# Home\n")
+
+    catalog = build_catalog(tmp_path)
+    graph = build_graph(catalog)
+
+    assert catalog["pages"]["guides/index"]["outlinks"] == [
+        "guides/child-page",
+        "home",
+    ]
+    edges = [edge for edge in graph["edges"] if edge["source"] == "guides/index"]
+    assert [(edge["target"], edge["resolved"]) for edge in edges] == [
+        ("guides/child-page", True),
+        ("home", True),
+    ]
+
+
 def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:
     write(
         tmp_path / ".wikic" / "config.json",
@@ -964,7 +987,7 @@ def test_doctor_json_includes_actionable_work_queue(tmp_path: Path) -> None:
             "action": "create_or_retarget_link",
             "page": "index",
             "target": "missing-page",
-            "message": "Missing wikilink target: missing-page",
+            "message": "Missing internal link target: missing-page",
         }
     ]
 
@@ -999,7 +1022,7 @@ def test_missing_link_work_items_include_suggested_targets(tmp_path: Path) -> No
             "page": "index",
             "target": "wiki-c",
             "suggested_targets": ["tools/wikic"],
-            "message": "Missing wikilink target: wiki-c",
+            "message": "Missing internal link target: wiki-c",
         }
     ]
 
@@ -1021,7 +1044,7 @@ def test_doctor_groups_duplicate_missing_targets(tmp_path: Path) -> None:
             "count": 2,
             "pages": ["a", "b"],
             "suggested_targets": ["tools/wikic"],
-            "message": "Missing wikilink target appears on 2 pages: wiki-c",
+            "message": "Missing internal link target appears on 2 pages: wiki-c",
         }
     ]
 

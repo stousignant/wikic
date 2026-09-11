@@ -46,7 +46,7 @@ wikic lint --candidates --vault . --json
 
 Runs deterministic health checks:
 
-- `WK001` — missing wikilink target.
+- `WK001` — missing internal wikilink or Markdown-link target.
 - `WK002` — isolated page with no inbound and no outbound links.
 - `WK003` — missing configured root file when `--require-vault-files` is set.
 
@@ -54,7 +54,7 @@ Exit code is `0` when clean, `1` when issues are found.
 
 ### `catalog`
 
-Writes `.wikic/catalog.json`, containing every Markdown page, title, frontmatter metadata, wikilinks, word count, and content hash.
+Writes `.wikic/catalog.json`, containing every Markdown page, title, frontmatter metadata, internal wikilinks and relative Markdown links, word count, and content hash.
 
 ### `graph`
 

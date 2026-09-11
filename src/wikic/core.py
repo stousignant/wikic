@@ -3,17 +3,20 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import posixpath
 import re
 from dataclasses import dataclass
 from datetime import date
 from difflib import SequenceMatcher, unified_diff
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import yaml
 
 LINK_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 LINK_OCCURRENCE_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)((?:#[^\]|]+)?(?:\|[^\]]+)?)\]\]")
+MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 WORD_RE = re.compile(r"\b\w+\b")
 ACTION_MARKER_RE = re.compile(r"(?im)(?:^\s*(?:[-*]\s*)?(?:TODO|FIXME|ACTION|NEXT)\b|- \[ \])")
@@ -439,11 +442,34 @@ def page_title(slug: str, frontmatter: dict[str, Any], body: str) -> str:
     return slug.rsplit("/", 1)[-1].replace("-", " ").title()
 
 
-def extract_links(body: str) -> list[str]:
+def extract_links(body: str, source_slug: str | None = None) -> list[str]:
     seen: set[str] = set()
     links: list[str] = []
     for match in LINK_RE.finditer(body):
         slug = normalize_slug(match.group(1))
+        if slug and slug not in seen:
+            links.append(slug)
+            seen.add(slug)
+    for match in MARKDOWN_LINK_RE.finditer(body):
+        destination = match.group(1).strip()
+        if destination.startswith("<") and destination.endswith(">"):
+            destination = destination[1:-1].strip()
+        if not destination or destination.startswith("#"):
+            continue
+        parsed = urlsplit(destination)
+        if parsed.scheme or parsed.netloc:
+            continue
+        path = unquote(parsed.path).replace("\\", "/")
+        if not path or (PurePosixPath(path).suffix and not path.casefold().endswith(".md")):
+            continue
+        path = path.removesuffix(".md")
+        if path.startswith("/"):
+            target = path.lstrip("/")
+        elif source_slug is not None:
+            target = posixpath.normpath(posixpath.join(posixpath.dirname(source_slug), path))
+        else:
+            target = path
+        slug = normalize_slug(target)
         if slug and slug not in seen:
             links.append(slug)
             seen.add(slug)
@@ -477,7 +503,7 @@ def build_catalog(root: str | Path) -> dict[str, Any]:
             "status": frontmatter.get("status"),
             "summary": frontmatter.get("summary"),
             "tags": frontmatter.get("tags", []),
-            "outlinks": extract_links(body),
+            "outlinks": extract_links(body, slug),
             "word_count": len(WORD_RE.findall(body)),
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         }
@@ -638,7 +664,7 @@ def run_doctor(
                 "severity": "error",
                 "page": edge["source"],
                 "target": edge["raw_target"],
-                "message": f"Missing wikilink target: {edge['raw_target']}",
+                "message": f"Missing internal link target: {edge['raw_target']}",
             }
             if suggested_targets:
                 issue["suggested_targets"] = suggested_targets
@@ -653,7 +679,7 @@ def run_doctor(
                     "page": edge["source"],
                     "target": edge["raw_target"],
                     "candidates": edge["candidates"],
-                    "message": f"Ambiguous wikilink target: {edge['raw_target']}",
+                    "message": f"Ambiguous internal link target: {edge['raw_target']}",
                 }
             )
 
@@ -1091,7 +1117,9 @@ def _build_work_queue_groups(issues: list[dict[str, Any]]) -> list[dict[str, Any
             "target": target,
             "count": len(target_issues),
             "pages": pages,
-            "message": f"Missing wikilink target appears on {len(target_issues)} pages: {target}",
+            "message": (
+                f"Missing internal link target appears on {len(target_issues)} pages: {target}"
+            ),
         }
         if suggested_targets:
             item["suggested_targets"] = suggested_targets
