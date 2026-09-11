@@ -42,6 +42,8 @@ This setting and the shared file apply across linked worktrees. Missing, empty, 
 
 The legacy worktree-local `.leakpatterns` file is no longer the source of truth. Move reviewed private rules to the shared location before enabling the requirement. Do not supply private rules to public pull-request code through Actions secrets.
 
+If a private rule also matches deliberate public authorship, configure an exact local exception with `git config --local --add leakSweep.allowedIdentity 'Public Author <public@example.test>'`, replacing the synthetic example with an explicitly approved identity. This exempts only that exact identity in real Git author/committer/tagger headers from privacy-pattern matching. Blob contents, filenames, commit/tag messages and publication prose remain checked, even if they imitate metadata headers. Credential scanning still receives the original metadata. Do not remove private patterns or change Git authorship merely to make a scan pass.
+
 ## Validation and publication
 
 ```bash

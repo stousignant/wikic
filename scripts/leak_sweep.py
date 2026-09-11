@@ -41,6 +41,45 @@ class Finding:
     pattern: str
 
 
+@dataclass(frozen=True)
+class MetadataChunk:
+    data: bytes
+    identity_fields: tuple[str, ...]
+
+
+Chunk = bytes | MetadataChunk
+
+
+def allowed_identities(root: Path) -> set[str]:
+    result = subprocess.run(
+        ["git", "config", "--local", "--null", "--get-all", "leakSweep.allowedIdentity"],
+        cwd=root,
+        capture_output=True,
+    )
+    if result.returncode == 1:
+        return set()
+    if result.returncode != 0:
+        raise ScanError("identity policy unavailable")
+    identities = {_decode(item) for item in result.stdout.split(b"\0") if item}
+    if any(not re.fullmatch(r"[^<>\r\n]+ <[^<>\r\n]+>", item) for item in identities):
+        raise ScanError("invalid identity policy")
+    return identities
+
+
+def privacy_text(chunk: Chunk, identities: set[str]) -> str:
+    if isinstance(chunk, bytes):
+        return _decode(chunk)
+    text = _decode(chunk.data)
+    headers, separator, body = text.partition("\n\n")
+    lines = []
+    for line in headers.split("\n"):
+        match = re.fullmatch(r"(author|committer|tagger) (.+ <[^<>\n]+>) (-?\d+ [+-]\d{4})", line)
+        if match and match[1] in chunk.identity_fields and match[2] in identities:
+            line = f"{match[1]} [approved-public-identity] {match[3]}"
+        lines.append(line)
+    return "\n".join(lines) + separator + body
+
+
 def _run_git(root: Path, args: list[str], *, text: bool = False) -> bytes | str:
     try:
         result = subprocess.run(
@@ -129,10 +168,10 @@ def _cat_file(root: Path, oid: str) -> tuple[str, bytes]:
     return kind, data
 
 
-def _staged_chunks(root: Path, excludes: set[str]) -> list[bytes]:
+def _staged_chunks(root: Path, excludes: set[str]) -> list[Chunk]:
     output = _run_git(root, ["ls-files", "--stage", "-z"])
     assert isinstance(output, bytes)
-    chunks: list[bytes] = []
+    chunks: list[Chunk] = []
     seen: set[str] = set()
     for record in output.split(b"\0"):
         if not record:
@@ -157,8 +196,8 @@ def _staged_chunks(root: Path, excludes: set[str]) -> list[bytes]:
     return chunks
 
 
-def _tree_chunks(root: Path, oid: str, seen_blobs: set[str]) -> list[bytes]:
-    chunks: list[bytes] = []
+def _tree_chunks(root: Path, oid: str, seen_blobs: set[str]) -> list[Chunk]:
+    chunks: list[Chunk] = []
     tree = _run_git(root, ["ls-tree", "-r", "-z", "--full-tree", oid])
     assert isinstance(tree, bytes)
     for record in tree.split(b"\0"):
@@ -182,8 +221,8 @@ def _tree_chunks(root: Path, oid: str, seen_blobs: set[str]) -> list[bytes]:
 
 def _revision_chunks(
     root: Path, revision_args: list[str], seen_blobs: set[str] | None = None
-) -> list[bytes]:
-    chunks: list[bytes] = []
+) -> list[Chunk]:
+    chunks: list[Chunk] = []
     commits = _run_git(root, ["rev-list", *revision_args])
     assert isinstance(commits, bytes)
     if seen_blobs is None:
@@ -195,13 +234,13 @@ def _revision_chunks(
             kind, data = _cat_file(root, commit_oid)
             if kind != "commit":
                 raise ScanError("unexpected revision object")
-            chunks.append(data)
+            chunks.append(MetadataChunk(data, ("author", "committer")))
             chunks.extend(_tree_chunks(root, commit_oid, seen_blobs))
     return chunks
 
 
-def _tag_chunks(root: Path, oid: str) -> list[bytes]:
-    chunks: list[bytes] = []
+def _tag_chunks(root: Path, oid: str) -> list[Chunk]:
+    chunks: list[Chunk] = []
     seen: set[str] = set()
     while oid not in seen:
         seen.add(oid)
@@ -214,7 +253,7 @@ def _tag_chunks(root: Path, oid: str) -> list[bytes]:
             break
         if kind != "tag":
             break
-        chunks.append(data)
+        chunks.append(MetadataChunk(data, ("tagger",)))
         first = data.splitlines()[0] if data else b""
         if not first.startswith(b"object "):
             raise ScanError("invalid annotated tag object")
@@ -222,7 +261,7 @@ def _tag_chunks(root: Path, oid: str) -> list[bytes]:
     return chunks
 
 
-def _history_chunks(root: Path) -> list[bytes]:
+def _history_chunks(root: Path) -> list[Chunk]:
     chunks = _revision_chunks(root, ["--all"])
     refs = _run_git(root, ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs"])
     assert isinstance(refs, bytes)
@@ -255,8 +294,8 @@ def _parse_updates(data: bytes) -> list[tuple[bytes, str, bytes, str]]:
     return updates
 
 
-def _pre_push_chunks(root: Path, data: bytes, remote_name: str | None) -> list[bytes]:
-    chunks: list[bytes] = []
+def _pre_push_chunks(root: Path, data: bytes, remote_name: str | None) -> list[Chunk]:
+    chunks: list[Chunk] = []
     seen_blobs: set[str] = set()
     for local_ref, local_oid, remote_ref, remote_oid in _parse_updates(data):
         if ZERO_RE.fullmatch(local_oid):
@@ -273,12 +312,12 @@ def _pre_push_chunks(root: Path, data: bytes, remote_name: str | None) -> list[b
     return chunks
 
 
-def scan_credentials(chunks: Iterable[bytes], executable: str = "gitleaks") -> list[Finding]:
+def scan_credentials(chunks: Iterable[Chunk], executable: str = "gitleaks") -> list[Finding]:
     with tempfile.TemporaryDirectory(prefix="publication-scan-") as directory:
         report = Path(directory) / "report.json"
         with tempfile.TemporaryFile() as stream:
             for chunk in chunks:
-                stream.write(chunk)
+                stream.write(chunk.data if isinstance(chunk, MetadataChunk) else chunk)
                 stream.write(b"\n-- publication boundary --\n")
             stream.seek(0)
             try:
@@ -377,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root.resolve()
     try:
         compiled = load_patterns(root, args.patterns_file)
+        identities = allowed_identities(root)
         text_file = args.text_file
         if args.text_file_env:
             text_file_value = os.environ.get("LEAK_SWEEP_TEXT_FILE")
@@ -398,7 +438,7 @@ def main(argv: list[str] | None = None) -> int:
 
         findings: list[Finding] = []
         for chunk in chunks:
-            findings.extend(scan_text(_decode(chunk), compiled))
+            findings.extend(scan_text(privacy_text(chunk, identities), compiled))
         if args.credentials or text_file:
             findings.extend(scan_credentials(chunks, args.gitleaks_executable))
         custom_count = sum(name.startswith("custom-") for name in compiled)

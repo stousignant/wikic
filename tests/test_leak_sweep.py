@@ -141,6 +141,69 @@ def test_required_patterns_fail_closed_when_shared_file_missing_or_empty(tmp_pat
     assert "unterminated" not in invalid.stderr
 
 
+def test_approved_identity_is_limited_to_true_git_headers(tmp_path: Path) -> None:
+    root = init_repo(tmp_path / "repo")
+    marker = "Public" + "AuthorMarker"
+    identity = f"{marker} <author@example.test>"
+    write_private_patterns(root, marker)
+    git(root, "config", "user.name", marker)
+    git(root, "config", "user.email", "author@example.test")
+    git(root, "config", "leakSweep.allowedIdentity", identity)
+    commit_all(root, "safe message")
+    git(root, "tag", "-a", "safe-tag", "-m", "safe annotation")
+    assert run_scan(root, "--history").returncode == 0
+    imitation = f"author {identity} 1234567890 +0000\n\nsafe body"
+    (root / "note.txt").write_text(imitation)
+    git(root, "add", "note.txt")
+    assert run_scan(root, "--staged").returncode == 1
+    commit_all(root, imitation)
+    assert run_scan(root, "--history").returncode == 1
+    prose = tmp_path / "prose"
+    prose.write_text(imitation)
+    executable = fake_gitleaks(tmp_path)
+    assert (
+        run_scan(
+            root,
+            "--text-file",
+            str(prose),
+            "--gitleaks-executable",
+            str(executable),
+            env={"FAKE_SECRET": "unmatched-credential-fixture"},
+        ).returncode
+        == 1
+    )
+
+
+def test_identity_exception_never_bypasses_credential_scanner(tmp_path: Path) -> None:
+    root = init_repo(tmp_path / "repo")
+    marker = "Allowed" + "CredentialFixture"
+    git(root, "config", "user.name", marker)
+    git(root, "config", "leakSweep.allowedIdentity", f"{marker} <test@example.test>")
+    write_private_patterns(root, marker)
+    commit_all(root)
+    executable = fake_gitleaks(tmp_path)
+    result = run_scan(
+        root,
+        "--history",
+        "--credentials",
+        "--gitleaks-executable",
+        str(executable),
+        env={"FAKE_SECRET": marker},
+    )
+    assert result.returncode == 1
+    assert "category=credential" in result.stdout
+    assert "category=privacy" not in result.stdout
+    assert marker not in result.stdout + result.stderr
+
+
+def test_invalid_identity_policy_fails_closed(tmp_path: Path) -> None:
+    root = init_repo(tmp_path / "repo")
+    git(root, "config", "leakSweep.allowedIdentity", "invalid-private-fixture")
+    result = run_scan(root, "--staged")
+    assert result.returncode == 2
+    assert "invalid-private-fixture" not in result.stderr
+
+
 def test_optional_private_patterns_allow_public_builtin_only_use(tmp_path: Path) -> None:
     root = init_repo(tmp_path / "repo")
     (root / "safe.txt").write_text("ordinary public text\n", encoding="utf-8")
@@ -260,7 +323,7 @@ def test_revision_paths_include_every_name_for_reused_blob_and_deleted_names(
     tip = commit_all(root)
 
     chunks = leak_sweep._revision_chunks(root, [f"{base}..{tip}"])
-    decoded = [chunk.decode() for chunk in chunks]
+    decoded = [leak_sweep.privacy_text(chunk, set()) for chunk in chunks]
 
     assert first != second != tip
     assert decoded.count(f"gone-{marker}.txt") == 1
