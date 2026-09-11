@@ -19,7 +19,6 @@ LINK_OCCURRENCE_RE = re.compile(r"(?<!!)\[\[([^\]|#]+)((?:#[^\]|]+)?(?:\|[^\]]+)
 MARKDOWN_LINK_START_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\(")
 FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
-HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?(?:-->|$)")
 H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 WORD_RE = re.compile(r"\b\w+\b")
 ACTION_MARKER_RE = re.compile(r"(?im)(?:^\s*(?:[-*]\s*)?(?:TODO|FIXME|ACTION|NEXT)\b|- \[ \])")
@@ -457,48 +456,66 @@ def _mask_markdown_nonlinks(body: str) -> str:
 
     fence: tuple[str, int] | None = None
     cursor = 0
-    for line in body.splitlines(keepends=True):
-        visible = "".join(chars[cursor : cursor + len(line)]).rstrip("\r\n")
-        if fence is not None:
-            blank(cursor, cursor + len(line))
+    while cursor < len(body):
+        if body[cursor] == "\n":
+            cursor += 1
+            continue
+        line_start = cursor == 0 or body[cursor - 1] == "\n"
+        if fence is not None and line_start:
+            line_end = body.find("\n", cursor)
+            if line_end == -1:
+                line_end = len(body)
+            visible = body[cursor:line_end].rstrip("\r")
             marker, width = fence
+            blank(cursor, line_end)
             if re.fullmatch(rf" {{0,3}}{re.escape(marker)}{{{width},}}[ \t]*", visible):
                 fence = None
-        else:
+            cursor = line_end
+            continue
+
+        if fence is None and line_start:
+            line_end = body.find("\n", cursor)
+            if line_end == -1:
+                line_end = len(body)
+            visible = body[cursor:line_end].rstrip("\r")
             opener = FENCE_OPEN_RE.match(visible)
             if opener is not None:
                 run = opener.group(1)
                 fence = (run[0], len(run))
-                blank(cursor, cursor + len(line))
-            elif INDENTED_CODE_RE.match(visible):
-                blank(cursor, cursor + len(line))
-        cursor += len(line)
+                blank(cursor, line_end)
+                cursor = line_end
+                continue
+            if INDENTED_CODE_RE.match(visible):
+                blank(cursor, line_end)
+                cursor = line_end
+                continue
 
-    masked = "".join(chars)
-    cursor = 0
-    while cursor < len(masked):
-        if masked[cursor] != "`":
-            cursor += 1
+        if fence is None and body.startswith("<!--", cursor):
+            closing = body.find("-->", cursor + 4)
+            end = len(body) if closing == -1 else closing + 3
+            blank(cursor, end)
+            cursor = end
             continue
-        width = 1
-        while cursor + width < len(masked) and masked[cursor + width] == "`":
-            width += 1
-        delimiter = "`" * width
-        closing = masked.find(delimiter, cursor + width)
-        while closing != -1 and (
-            (closing > 0 and masked[closing - 1] == "`")
-            or (closing + width < len(masked) and masked[closing + width] == "`")
-        ):
-            closing = masked.find(delimiter, closing + width)
-        if closing == -1:
+
+        if fence is None and body[cursor] == "`":
+            width = 1
+            while cursor + width < len(body) and body[cursor + width] == "`":
+                width += 1
+            delimiter = "`" * width
+            closing = body.find(delimiter, cursor + width)
+            while closing != -1 and (
+                (closing > 0 and body[closing - 1] == "`")
+                or (closing + width < len(body) and body[closing + width] == "`")
+            ):
+                closing = body.find(delimiter, closing + width)
+            if closing != -1:
+                blank(cursor, closing + width)
+                cursor = closing + width
+                continue
             cursor += width
             continue
-        blank(cursor, closing + width)
-        masked = "".join(chars)
-        cursor = closing + width
-    masked = "".join(chars)
-    for match in HTML_COMMENT_RE.finditer(masked):
-        blank(match.start(), match.end())
+
+        cursor += 1
     return "".join(chars)
 
 

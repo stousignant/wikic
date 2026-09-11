@@ -163,7 +163,7 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
         "<!-- [Comment](comment.md) [[WikiComment]] -->\n"
     )
     write(tmp_path / "index.md", body)
-    write(tmp_path / "long-fence.md", "~~~md\n[Fake](fake.md)\n~~~~\n")
+    write(tmp_path / "long-fence.md", "~~~md\n[Fake](fake.md)\n\n~~~~\n")
     write(tmp_path / "unclosed-fence.md", "```md\n[Fake](fake.md)\n")
     write(tmp_path / "indented.md", "    [Fake](fake.md) [[WikiFake]]\n")
     write(tmp_path / "unclosed-comment.md", "<!-- [Fake](fake.md) [[WikiFake]]\n")
@@ -174,6 +174,14 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     )
     write(tmp_path / "comment-inline.md", "`<!--`\n[Real](real.md)\n")
     write(tmp_path / "comment-indented.md", "    <!--\n[Real](real.md)\n")
+    write(
+        tmp_path / "fence-in-comment.md",
+        "<!--\n```md\n[Hidden](hidden.md)\n-->\n[Real](real.md)\n",
+    )
+    write(
+        tmp_path / "comment-in-closing-fence.md",
+        "```md\n<!--\n```\n-->\n[Real](real.md)\n",
+    )
 
     catalog = build_catalog(tmp_path)
     readiness = build_okf_readiness(tmp_path)
@@ -181,7 +189,13 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     assert catalog["pages"]["index"]["outlinks"] == []
     for slug in ("long-fence", "unclosed-fence", "indented", "unclosed-comment"):
         assert catalog["pages"][slug]["outlinks"] == []
-    for slug in ("comment-in-fence", "comment-inline", "comment-indented"):
+    for slug in (
+        "comment-in-fence",
+        "comment-inline",
+        "comment-indented",
+        "fence-in-comment",
+        "comment-in-closing-fence",
+    ):
         assert catalog["pages"][slug]["outlinks"] == ["real"]
     assert readiness["invalid_index_files"] == [
         {"path": "index.md", "reason": "missing_markdown_link_entry"}
