@@ -153,11 +153,12 @@ def test_approved_identity_is_limited_to_true_git_headers(tmp_path: Path) -> Non
     git(root, "tag", "-a", "safe-tag", "-m", "safe annotation")
     assert run_scan(root, "--history").returncode == 0
     imitation = f"author {identity} 1234567890 +0000\n\nsafe body"
+    # No blob exists yet: only the message can cause this history failure.
+    commit_all(root, imitation)
+    assert run_scan(root, "--history").returncode == 1
     (root / "note.txt").write_text(imitation)
     git(root, "add", "note.txt")
     assert run_scan(root, "--staged").returncode == 1
-    commit_all(root, imitation)
-    assert run_scan(root, "--history").returncode == 1
     prose = tmp_path / "prose"
     prose.write_text(imitation)
     executable = fake_gitleaks(tmp_path)

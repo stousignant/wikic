@@ -167,7 +167,9 @@ def install(args: argparse.Namespace) -> None:
     snapshot = publication / SNAPSHOT_NAME
     hooks = common / "hooks"
     hook_paths = {name: hooks / name for name in HOOK_NAMES}
-    foreign = [path for path in hook_paths.values() if path.exists() and not _owned(path)]
+    if any(path.is_symlink() for path in hook_paths.values()):
+        raise InstallError("symlink hooks require manual integration")
+    foreign = [path for path in hook_paths.values() if os.path.lexists(path) and not _owned(path)]
     if foreign and not args.replace_existing:
         raise InstallError("existing hook not owned; use --replace-existing")
 

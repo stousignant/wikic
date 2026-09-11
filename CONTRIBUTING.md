@@ -18,7 +18,7 @@ python3 scripts/install_publication_hooks.py
 
 The installer requires gitleaks on `PATH`, or an explicit reviewed binary supplied with `--gitleaks-executable`. It records that executable and installs a snapshot of the reviewed scanner in the shared Git directory. Commit and push gates run that snapshot, not branch-local code or pre-commit configuration. Older linked worktrees therefore receive the same gate without changing their tracked files. Reinstall deliberately after reviewing scanner updates.
 
-The helper preserves every ref-update record supplied by Git, including pushes that update several branches or tags. It refuses to overwrite non-owned hooks by default. Review existing hooks first; `--replace-existing` explicitly replaces them with private backups. Do not use a generic `pre-commit install` to overwrite these installed publication hooks.
+The helper preserves every ref-update record supplied by Git, including pushes that update several branches or tags. It refuses to overwrite non-owned hooks by default. Review existing hooks first; `--replace-existing` explicitly replaces ordinary hook files with private backups. Symlink hooks and custom `core.hooksPath` settings require manual integration and are refused without modification. Do not use a generic `pre-commit install` to overwrite these installed publication hooks.
 
 The staged gate scans the index, not unstaged working-tree replacements. The push gate checks outgoing Git content and metadata before transmission, including historical files, commit messages and annotated tags. Both installed gates include credential scanning. The optional pre-commit commands below use their separately pinned gitleaks environment for manual checks.
 

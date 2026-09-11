@@ -254,6 +254,24 @@ def test_custom_hooks_path_is_not_silently_ignored(tmp_path: Path) -> None:
     assert not (common_dir(root) / "publication").exists()
 
 
+def test_symlink_hooks_are_preserved_even_with_replacement_requested(tmp_path: Path) -> None:
+    root = init_repo(tmp_path / "repo")
+    tool = fake_gitleaks(tmp_path)
+    target = tmp_path / "hook-target"
+    hook = common_dir(root) / "hooks" / "pre-commit"
+    hook.symlink_to(target)
+    for target_exists in (False, True):
+        if target_exists:
+            target.write_text("#!/bin/sh\nexit 7\n")
+        for flags in ((), ("--replace-existing",)):
+            result = run_installer(root, *flags, gitleaks=tool)
+            assert result.returncode == 2
+            assert hook.is_symlink()
+            assert hook.readlink() == target
+            assert target.exists() == target_exists
+            assert not (common_dir(root) / "publication").exists()
+
+
 def test_owned_reinstall_is_idempotent_and_creates_no_backup(tmp_path: Path) -> None:
     root = init_repo(tmp_path / "repo")
     tool = fake_gitleaks(tmp_path)
