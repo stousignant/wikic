@@ -1545,24 +1545,16 @@ def _okf_index_issue(rel_path: str, text: str, root_index: bool) -> dict[str, An
     if has_frontmatter:
         if not root_index:
             return {"path": rel_path, "reason": "frontmatter_not_allowed"}
-        if set(frontmatter) - {"okf_version"}:
+        if set(frontmatter) != {"okf_version"}:
             return {"path": rel_path, "reason": "unsupported_root_frontmatter"}
-        version = frontmatter.get("okf_version")
-        if version is not None and str(version) != "0.2":
+        version = frontmatter["okf_version"]
+        if str(version) != "0.2":
             return {"path": rel_path, "reason": "wrong_okf_version"}
     headings = list(re.finditer(r"(?m)^(#{1,6})\s+\S.*$", body))
     if not headings:
         return {"path": rel_path, "reason": "missing_section_heading"}
-    link_entry = re.compile(r"(?m)^\s*[*+-]\s+\[[^]]+\]\([^)]+\)")
-    for position, heading in enumerate(headings):
-        next_heading = headings[position + 1] if position + 1 < len(headings) else None
-        section_end = next_heading.start() if next_heading else len(body)
-        section = body[heading.end() : section_end]
-        has_child_section = bool(
-            next_heading and len(next_heading.group(1)) > len(heading.group(1))
-        )
-        if not has_child_section and link_entry.search(section) is None:
-            return {"path": rel_path, "reason": "section_without_link_entry"}
+    if re.search(r"\[[^\]]+\]\([^)]+\)", body) is None:
+        return {"path": rel_path, "reason": "missing_markdown_link_entry"}
     return None
 
 

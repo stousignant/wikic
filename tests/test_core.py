@@ -179,11 +179,21 @@ def test_okf_v02_handles_recursive_and_nonfinite_invalid_types(tmp_path: Path) -
     assert all(isinstance(item["type"], str) for item in readiness["invalid_type_pages"])
 
 
-def test_okf_v02_rejects_empty_index_sections_and_log_prose(tmp_path: Path) -> None:
+def test_okf_v02_accepts_supporting_index_sections_and_table_links(tmp_path: Path) -> None:
     write(
         tmp_path / "index.md",
-        "# Index\n\n## Populated\n- [Page](page.md)\n\n## Empty\n",
+        "# Index\n\n## Context\nSupporting prose.\n\n## Concepts\n"
+        "| Concept | Purpose |\n|---|---|\n| [Page](page.md) | Example |\n\n"
+        "## Notes\nThis section does not need its own link.\n",
     )
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["invalid_index_files"] == []
+
+
+def test_okf_v02_rejects_index_without_markdown_link_and_log_prose(tmp_path: Path) -> None:
+    write(tmp_path / "index.md", "# Index\n\n## Concepts\n- [[page|Page]]\n")
     write(
         tmp_path / "log.md",
         "# Change Log\n\n## 2026-06-01\n  Indented prose only.\n",
@@ -192,9 +202,19 @@ def test_okf_v02_rejects_empty_index_sections_and_log_prose(tmp_path: Path) -> N
     readiness = build_okf_readiness(tmp_path)
 
     assert readiness["invalid_index_files"] == [
-        {"path": "index.md", "reason": "section_without_link_entry"}
+        {"path": "index.md", "reason": "missing_markdown_link_entry"}
     ]
     assert readiness["invalid_log_files"] == [{"path": "log.md", "reason": "invalid_date_entries"}]
+
+
+def test_okf_v02_rejects_empty_root_frontmatter(tmp_path: Path) -> None:
+    write(tmp_path / "index.md", "---\n---\n# Index\n\n- [Page](page.md)\n")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["invalid_index_files"] == [
+        {"path": "index.md", "reason": "unsupported_root_frontmatter"}
+    ]
 
 
 def test_okf_profile_summary_reports_non_utf8_instead_of_crashing(tmp_path: Path) -> None:
