@@ -62,10 +62,14 @@ def test_catalog_and_graph_resolve_relative_markdown_links(tmp_path: Path) -> No
     write(
         tmp_path / "guides" / "index.md",
         "# Guides\n\n- [Child](child%20page.md)\n- [Home](../home.md#Start)\n"
+        '- [Upper](upper.MD)\n- [Titled](title.md "Optional title")\n- [Dir](subdir/)\n'
         "- [External](https://example.test/page.md)\n![Image](diagram.md)\n",
     )
     write(tmp_path / "guides" / "child page.md", "---\ntype: guide\n---\n# Child\n")
     write(tmp_path / "home.md", "---\ntype: page\n---\n# Home\n")
+    write(tmp_path / "guides" / "upper.MD", "---\ntype: page\n---\n# Upper\n")
+    write(tmp_path / "guides" / "title.md", "---\ntype: page\n---\n# Title\n")
+    write(tmp_path / "guides" / "subdir" / "index.md", "# Subdirectory\n")
 
     catalog = build_catalog(tmp_path)
     graph = build_graph(catalog)
@@ -73,12 +77,30 @@ def test_catalog_and_graph_resolve_relative_markdown_links(tmp_path: Path) -> No
     assert catalog["pages"]["guides/index"]["outlinks"] == [
         "guides/child-page",
         "home",
+        "guides/upper",
+        "guides/title",
+        "guides/subdir/index",
     ]
     edges = [edge for edge in graph["edges"] if edge["source"] == "guides/index"]
     assert [(edge["target"], edge["resolved"]) for edge in edges] == [
         ("guides/child-page", True),
         ("home", True),
+        ("guides/upper", True),
+        ("guides/title", True),
+        ("guides/subdir/index", True),
     ]
+
+
+def test_catalog_reports_relative_links_that_escape_the_vault_as_missing(tmp_path: Path) -> None:
+    write(tmp_path / "guides" / "index.md", "# Guides\n\n- [Escape](../../outside.md)\n")
+    write(tmp_path / "outside.md", "---\ntype: page\n---\n# Outside\n")
+
+    graph = build_graph(build_catalog(tmp_path))
+
+    edge = next(edge for edge in graph["edges"] if edge["source"] == "guides/index")
+    assert edge["resolved"] is False
+    assert edge["target"] is None
+    assert edge["raw_target"] == "invalid-outside-vault-link/outside"
 
 
 def test_summary_reports_compact_health_snapshot(tmp_path: Path) -> None:
@@ -213,6 +235,29 @@ def test_okf_v02_accepts_supporting_index_sections_and_table_links(tmp_path: Pat
     readiness = build_okf_readiness(tmp_path)
 
     assert readiness["invalid_index_files"] == []
+
+
+def test_okf_v02_requires_string_version_and_usable_relative_index_links(tmp_path: Path) -> None:
+    write(
+        tmp_path / "index.md",
+        "---\nokf_version: 0.2\n---\n# Index\n\n- [Page](page.md)\n",
+    )
+    write(
+        tmp_path / "external" / "index.md", "# External\n\n- [Web](https://example.test/page.md)\n"
+    )
+    write(tmp_path / "image" / "index.md", "# Image\n\n![Diagram](diagram.md)\n")
+    write(tmp_path / "absolute" / "index.md", "# Absolute\n\n- [Page](/page.md)\n")
+    write(tmp_path / "blank" / "index.md", "# Blank\n\n- [Page]( )\n")
+
+    readiness = build_okf_readiness(tmp_path)
+
+    assert readiness["invalid_index_files"] == [
+        {"path": "absolute/index.md", "reason": "missing_markdown_link_entry"},
+        {"path": "blank/index.md", "reason": "missing_markdown_link_entry"},
+        {"path": "external/index.md", "reason": "missing_markdown_link_entry"},
+        {"path": "image/index.md", "reason": "missing_markdown_link_entry"},
+        {"path": "index.md", "reason": "wrong_okf_version"},
+    ]
 
 
 def test_okf_v02_rejects_index_without_markdown_link_and_log_prose(tmp_path: Path) -> None:
@@ -1103,6 +1148,27 @@ def test_repair_plan_groups_review_required_retarget_operations(tmp_path: Path) 
             "status": "review_required",
         },
     ]
+
+
+def test_repair_plan_keeps_markdown_link_repairs_inspection_only(tmp_path: Path) -> None:
+    write(tmp_path / "a.md", "# A\n[Wikic](wiki-c.md)\n")
+    write(tmp_path / "b.md", "# B\n[Wikic](wiki-c.md)\n")
+    write(tmp_path / "tools" / "wikic.md", "# Wikic\n")
+
+    payload = build_repair_plan(tmp_path, ignore_orphans=True, patch_preview=True)
+
+    assert payload["summary"] == {
+        "operation_count": 1,
+        "retarget_operations": 0,
+        "inspect_operations": 1,
+        "review_required": 1,
+    }
+    operation = payload["operations"][0]
+    assert operation["action"] == "inspect_missing_target"
+    assert operation["occurrences"] == []
+    assert "patch_preview" not in operation
+    assert "replacement_target" not in operation
+    assert "does not rewrite automatically" in operation["reason"]
 
 
 def test_repair_plan_requires_inspection_without_single_suggestion(tmp_path: Path) -> None:
