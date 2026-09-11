@@ -142,6 +142,20 @@ def test_markdown_links_use_raw_source_paths_and_markdown_escapes(tmp_path: Path
     assert edge["resolution"] == "invalid_path_separator"
 
 
+def test_markdown_escapes_are_applied_before_url_classification(tmp_path: Path) -> None:
+    write(tmp_path / "foo.md", "# Foo\n")
+    write(
+        tmp_path / "links.md",
+        "# Links\n[Fragment](foo.md\\#Section)\n[Query](foo.md\\?view=1)\n"
+        "[External](https\\://example.test/page.md)\n",
+    )
+
+    catalog = build_catalog(tmp_path)
+
+    assert catalog["pages"]["links"]["outlinks"] == ["foo"]
+    assert catalog["pages"]["links"]["invalid_outlinks"] == []
+
+
 def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     body = (
         "# Examples\n\n```md\n[Code](code.md) [[WikiCode]]\n```\n\n"
@@ -153,6 +167,13 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     write(tmp_path / "unclosed-fence.md", "```md\n[Fake](fake.md)\n")
     write(tmp_path / "indented.md", "    [Fake](fake.md) [[WikiFake]]\n")
     write(tmp_path / "unclosed-comment.md", "<!-- [Fake](fake.md) [[WikiFake]]\n")
+    write(tmp_path / "real.md", "# Real\n")
+    write(
+        tmp_path / "comment-in-fence.md",
+        "```md\n<!--\n```\n[Real](real.md)\n",
+    )
+    write(tmp_path / "comment-inline.md", "`<!--`\n[Real](real.md)\n")
+    write(tmp_path / "comment-indented.md", "    <!--\n[Real](real.md)\n")
 
     catalog = build_catalog(tmp_path)
     readiness = build_okf_readiness(tmp_path)
@@ -160,6 +181,8 @@ def test_markdown_links_ignore_code_and_comments(tmp_path: Path) -> None:
     assert catalog["pages"]["index"]["outlinks"] == []
     for slug in ("long-fence", "unclosed-fence", "indented", "unclosed-comment"):
         assert catalog["pages"][slug]["outlinks"] == []
+    for slug in ("comment-in-fence", "comment-inline", "comment-indented"):
+        assert catalog["pages"][slug]["outlinks"] == ["real"]
     assert readiness["invalid_index_files"] == [
         {"path": "index.md", "reason": "missing_markdown_link_entry"}
     ]

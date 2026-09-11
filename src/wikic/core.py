@@ -455,9 +455,6 @@ def _mask_markdown_nonlinks(body: str) -> str:
             if chars[offset] != "\n":
                 chars[offset] = " "
 
-    for match in HTML_COMMENT_RE.finditer(body):
-        blank(match.start(), match.end())
-
     fence: tuple[str, int] | None = None
     cursor = 0
     for line in body.splitlines(keepends=True):
@@ -499,6 +496,9 @@ def _mask_markdown_nonlinks(body: str) -> str:
         blank(cursor, closing + width)
         masked = "".join(chars)
         cursor = closing + width
+    masked = "".join(chars)
+    for match in HTML_COMMENT_RE.finditer(masked):
+        blank(match.start(), match.end())
     return "".join(chars)
 
 
@@ -566,13 +566,13 @@ def _markdown_destination(
     destination: str, source_path: str | None
 ) -> tuple[str | None, str | None]:
     destination = destination.strip()
+    destination = re.sub(r"\\([!\"#$%&'()*+,./:;<=>?@\[\]^_`{|}~-])", r"\1", destination)
     if not destination or destination.startswith("#"):
         return None, None
     parsed = urlsplit(destination)
     if parsed.scheme or parsed.netloc:
         return None, None
     path = unquote(parsed.path)
-    path = re.sub(r"\\([!\"#$%&'()*+,./:;<=>?@\[\]^_`{|}~-])", r"\1", path)
     if "\\" in path:
         return None, "invalid_path_separator"
     if not path or path.startswith("/"):
