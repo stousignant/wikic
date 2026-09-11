@@ -17,5 +17,25 @@ llms.txt
 .vscode/
 .idea/
 
+# Credentials and machine-local runtime state
+.env
+.env.*
+!.env.example
+!.env.template
+auth.json
+credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+*.log
+*.sqlite
+*.sqlite3
+.hermes/
+.claude/
+.worktrees/
+
 # Environment-specific leak patterns; never committed.
 .leakpatterns
