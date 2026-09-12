@@ -32,7 +32,8 @@ wikic catalog --root .
 wikic graph --root .
 wikic llms --root . --title "My Vault"
 wikic summary --root . --json
-wikic summary --root . --profile okf-compatible --json
+wikic summary --root . --profile okf-v0.2 --json
+wikic summary --root . --profile vault-policy --json
 wikic ingest ./source.md --vault . --json
 wikic review list --vault . --json
 wikic review show CANDIDATE_ID --vault . --json
@@ -45,15 +46,17 @@ wikic lint --candidates --vault . --json
 
 Runs deterministic health checks:
 
-- `WK001` — missing wikilink target.
+- `WK001` — missing internal wikilink or Markdown-link target.
 - `WK002` — isolated page with no inbound and no outbound links.
-- `WK003` — missing required vault operating file when `--require-vault-files` is set.
+- `WK003` — missing configured root file when `--require-vault-files` is set.
+- `WK004` — ambiguous internal link target.
+- `WK005` — unsafe relative Markdown link that escapes the vault or uses a backslash separator.
 
 Exit code is `0` when clean, `1` when issues are found.
 
 ### `catalog`
 
-Writes `.wikic/catalog.json`, containing every Markdown page, title, frontmatter metadata, wikilinks, word count, and content hash.
+Writes `.wikic/catalog.json`, containing every Markdown page, title, frontmatter metadata, internal wikilinks and relative Markdown links, word count, and content hash.
 
 ### `graph`
 
@@ -67,29 +70,64 @@ Writes `llms.txt`, a compact agent navigation file grouped by page type.
 
 Prints a compact deterministic advisor snapshot: catalog/doctor/graph stats, top-level counts, frontmatter coverage and exact `frontmatter_gaps`, timeline coverage, action/stale marker hotspots, index coverage, large-page pressure, generated-report policy violations, largest pages, and naming-policy violations.
 
-With `--profile okf-compatible --json`, `summary` also includes an `okf_readiness` object. This is a non-mutating compatibility audit for durable, curated pages that may later be exported or normalized into OKF/OpenWiki dialects. Wikic remains the authority for the local vault's structural health; OKF/OpenWiki are compatibility/input-output dialects only.
+When `.wikic/config.json` enables OKF, `summary`, `doctor`, and `health` automatically validate the normative conformance rules in the public [Open Knowledge Format v0.2 specification](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/0b87c52c6ef999286c745e19998fdfcd03d5dbee/SPEC.md). The check inspects every non-excluded Markdown file under the root, including hidden directories: concept documents need valid UTF-8, parseable YAML frontmatter, and a non-empty string `type`; exact lowercase reserved `index.md` and `log.md` files are validated separately. Unknown types, additional keys, nested YAML, missing optional metadata, broken links, and absent indexes are accepted as the specification requires.
 
-The OKF profile is deterministic and config-backed. It checks curated/source-derived pages for missing or unknown `type`, malformed frontmatter, missing deterministic provenance (`source`, `sources`, `source_url`, `source_uri`, or configured equivalents), bespoke frontmatter fields, and export-blocking complex metadata shapes. Type suggestions are deterministic folder/config mappings, not LLM output. Source-layer and scratch material such as `raw/`, `archive/`, generated reports, and scratch/planning folders are excluded from canonical OKF-readiness failures by default.
+Producer-specific taxonomy, provenance, path, and export-shape opinions belong to `vault_policy`. It has no built-in taxonomy or path scope and is automatically checked only when its configuration object is non-empty. `doctor`/`health` expose OKF diagnostics as WK010-WK015 and configured vault-policy diagnostics as WK020-WK025. Without either configured audit, Wikic runs only its ordinary structural health checks. `--profile okf-v0.2` and `--profile vault-policy` remain available as advanced, one-command overrides that force-add the named audit.
 
-The same profile can be requested on `doctor`/`health` to emit WK010-WK015 diagnostics. Without `--profile okf-compatible`, default `summary` and `doctor` output shapes and exit-code behavior are unchanged.
+### Configuration and defaults
 
-Naming and generated-report policy are configured per vault in `.wikic/config.json`:
+Wikic keeps its configurable product-opinion defaults deliberately small:
+
+- `exclude` extends `archive/**`, `archives/**`, `raw/**`, `generated/**`, and `tmp/**` unless `exclude_mode` is `replace`.
+- `okf.exclude` applies only to OKF validation; it does not remove files from Wikic's ordinary catalog or graph.
+- Timeline coverage applies to `company`, `person`, `project`, and `tool` types, with no path-prefix assumptions.
+- Large-page pressure starts at 1,000 words.
+- No root files, vault taxonomy, provenance aliases, or custom frontmatter allowlist are required by default.
+- Lowercase, hyphenated paths are the default naming convention; set `naming_policy_enabled` to `false` to disable it or add explicit exemptions.
+
+Timeline and vault-policy lists replace their corresponding defaults; an empty list disables that list-driven rule. `exclude` is the exception: it extends defaults unless `exclude_mode` is `replace`. Naming enforcement uses the separate boolean switch because an empty exemption list means no paths are exempt.
+
+Configure a vault in `.wikic/config.json`:
 
 ```json
 {
+  "okf": {
+    "enabled": true,
+    "version": "0.2",
+    "exclude": [".github/**", ".claude/**", "raw/**", "archive/**"]
+  },
+  "exclude_mode": "replace",
+  "exclude": ["build/**", "drafts/**"],
+  "required_root_files": ["index.md", "policy/schema.md"],
+  "timeline_policy": {
+    "eligible_types": ["project", "service"],
+    "eligible_path_prefixes": ["operations/"]
+  },
+  "large_page_word_threshold": 1500,
+  "naming_policy_enabled": true,
   "naming_policy_exemptions": [
     "README.md",
-    "SCHEMA.md",
-    "research/github-repos/repos/*--*.md"
+    "catalog/repositories/*--*.md"
   ],
   "generated_report_policy": {
     "rules": [
       {
-        "path_glob": "reports/vault-cleanup-advisor/*.md",
+        "path_glob": "reports/weekly/*.md",
         "rollup": "reports/index.md",
         "require_frontmatter": true
       }
     ]
+  },
+  "vault_policy": {
+    "allowed_types": ["project", "reference"],
+    "allowed_frontmatter_fields": ["title", "type", "source_url"],
+    "provenance_fields": ["source_url"],
+    "provenance_trigger_fields": ["source_expected"],
+    "curated_prefixes": ["knowledge/"],
+    "excluded_patterns": ["knowledge/drafts/**"],
+    "source_derived_prefixes": ["knowledge/sources/"],
+    "provenance_expected_types": ["reference"],
+    "type_suggestions": {"projects": "project"}
   }
 }
 ```

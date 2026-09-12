@@ -75,34 +75,49 @@ def test_cli_summary_json_returns_compact_snapshot(tmp_path: Path) -> None:
 
 
 def test_cli_summary_profile_okf_json_returns_readiness(tmp_path: Path) -> None:
-    write(tmp_path / "projects" / "missing-type.md", "# Missing Type\n")
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
 
-    result = run_cli(tmp_path, "summary", "--profile", "okf-compatible", "--json")
+    result = run_cli(tmp_path, "summary", "--profile", "okf-v0.2", "--json")
 
     assert result.returncode == 0
     payload = json.loads(result.stdout)
-    assert payload["okf_readiness"]["pages_missing_type"] == 1
-    assert payload["okf_readiness"]["missing_type_pages"] == [
-        {"path": "projects/missing-type.md", "suggested_type": "project"}
+    assert payload["okf_readiness"]["conformant"] is False
+    assert payload["okf_readiness"]["invalid_type_pages"] == [
+        {"path": "missing-type.md", "type": "None"}
     ]
 
 
 def test_cli_doctor_profile_okf_reports_profile_diagnostics(tmp_path: Path) -> None:
-    write(tmp_path / "projects" / "missing-type.md", "# Missing Type\n")
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
 
     result = run_cli(
         tmp_path,
         "doctor",
         "--ignore-orphans",
         "--profile",
-        "okf-compatible",
+        "okf-v0.2",
         "--json",
     )
 
     assert result.returncode == 1
     payload = json.loads(result.stdout)
-    assert payload["issues"][0]["code"] == "WK010"
-    assert payload["issues"][0]["suggested_type"] == "project"
+    assert payload["issues"][0]["code"] == "WK011"
+
+
+def test_cli_uses_configured_okf_without_profile_flag(tmp_path: Path) -> None:
+    write(
+        tmp_path / ".wikic" / "config.json",
+        json.dumps({"okf": {"enabled": True, "version": "0.2", "exclude": []}}),
+    )
+    write(tmp_path / "missing-type.md", "---\ntitle: Missing Type\n---\n# Missing Type\n")
+
+    summary = run_cli(tmp_path, "summary", "--json")
+    doctor = run_cli(tmp_path, "doctor", "--ignore-orphans", "--json")
+
+    assert summary.returncode == 0
+    assert json.loads(summary.stdout)["okf_readiness"]["invalid_type_count"] == 1
+    assert doctor.returncode == 1
+    assert json.loads(doctor.stdout)["issues"][0]["code"] == "WK011"
 
 
 def test_cli_catalog_writes_json_artifact(tmp_path: Path) -> None:

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 STATE_DIR = Path(".wikic")
-REQUIRED_VAULT_FILES = ["SCHEMA.md", "index.md", "log.md"]
 
 
 def now_iso() -> str:
