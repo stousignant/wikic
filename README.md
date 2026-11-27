@@ -170,9 +170,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the public-by-default security rule, 
 
 ```bash
 uv sync --locked --all-groups
-uv run pytest -q
-uv run ruff check .
-uv run ruff format --check .
+just check  # requires https://just.systems
 ```
 
 ## License

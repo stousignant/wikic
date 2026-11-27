@@ -46,15 +46,14 @@ If a private rule also matches deliberate public authorship, configure an exact 
 
 ## Validation and publication
 
+Run `just check` before opening a PR (requires [just](https://just.systems)). It runs ruff lint and format checks, pytest, and `python3 scripts/leak_sweep.py --history`; see the `justfile`.
+
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q
+just check
 pre-commit run --all-files
-python3 scripts/leak_sweep.py --history
 ```
 
-The history command above checks privacy patterns. Add `--credentials` when running with gitleaks on `PATH` to scan credentials too. Installed commit/push hooks include credential scanning through the executable selected at installation.
+The history sweep in `just check` checks privacy patterns. Add `--credentials` when running with gitleaks on `PATH` to scan credentials too. Installed commit/push hooks include credential scanning through the executable selected at installation.
 
 Before each push, review the exact outgoing commits, paths and metadata. Then use normal `git push` so the installed gate receives the real ref updates. A manually invoked generic pre-push stage is not a substitute for those update records.
 
