@@ -14,9 +14,10 @@ Wikic is a deterministic Markdown/LLM-wiki compiler.
 
 ## Dev commands
 
+Run `just check` before handing off or opening a PR (requires [just](https://just.systems)).
+
 ```bash
-uv run pytest -q
-uv run ruff check .
+just check
 uv run wikic doctor --root . --json
 uv run wikic lint --candidates --vault /path/to/vault --json
 ```
